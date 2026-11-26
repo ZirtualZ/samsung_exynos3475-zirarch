@@ -1,0 +1,12 @@
+--- a/buffyboard/uinput_device.c
++++ b/buffyboard/uinput_device.c
+@@ -81,8 +81,8 @@ bool bb_uinput_device_init(const int * const scancodes, int num_scancodes) {
+ 	device.id.product = 1;
+ 	device.id.version = 1;
+ 
+-	if (ioctl(fd, UI_DEV_SETUP, &device) < 0) {
+-		perror("Could not set up uinput device");
++	if (write(fd, &device, sizeof(device)) != sizeof(device)) {
++		perror("Could not write legacy uinput device");
+ 		return false;
+ 	}

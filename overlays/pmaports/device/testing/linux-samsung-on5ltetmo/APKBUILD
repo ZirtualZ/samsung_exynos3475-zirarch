@@ -1,0 +1,67 @@
+# Reference: https://postmarketos.org/vendorkernel
+# Kernel config based on: arch/arm/configs/lineage-on5ltetmo_defconfig
+maintainer=""
+pkgname=linux-samsung-on5ltetmo
+pkgver=3.10.108
+pkgrel=0
+pkgdesc="Samsung Galaxy On5 (T-Mobile) downstream kernel"
+arch="armv7"
+_carch="arm"
+_flavor="samsung-on5ltetmo"
+url="https://github.com/ZirtualZ/android_kernel_samsung_exynos3475-zirarch"
+license="GPL-2.0-only"
+options="!strip !check !tracedeps pmb:cross-native"
+makedepends="
+	bash
+	bc
+	devicepkg-dev
+	dtbtool-exynos
+	gcc4
+	linux-headers
+	perl
+"
+
+_repository="android_kernel_samsung_exynos3475-zirarch"
+_commit="3280d5140d972a331d7d4d496af32fa9ce2d60ba"
+_config="config-$_flavor.$arch"
+source="
+	$pkgname-$_commit.tar.gz::https://github.com/ZirtualZ/$_repository/archive/$_commit.tar.gz
+	$_config
+"
+builddir="$srcdir/$_repository-$_commit"
+_outdir="out"
+
+if [ "${CC:0:5}" != "gcc4-" ]; then
+	CC="gcc4-$CC"
+	HOSTCC="gcc4-gcc"
+	CROSS_COMPILE="gcc4-$CROSS_COMPILE"
+fi
+
+prepare() {
+	default_prepare
+	. downstreamkernel_prepare
+}
+
+build() {
+	unset LDFLAGS
+	make O="$_outdir" ARCH="$_carch" \
+		KBUILD_BUILD_VERSION="$((pkgrel + 1))-postmarketOS"
+
+	dtbTool-exynos --pagesize 2048 \
+		-o "$_outdir/arch/$_carch/boot/dt.img" \
+		$(find "$_outdir/arch/$_carch/boot/dts/" \
+			-name "exynos3475-on5lte_usa_tmo_*.dtb")
+}
+
+package() {
+	downstreamkernel_package "$builddir" "$pkgdir" "$_carch" \
+		"$_flavor" "$_outdir"
+
+	install -Dm644 "$_outdir/arch/$_carch/boot/dt.img" \
+		"$pkgdir/boot/dt.img"
+}
+
+sha512sums="
+12080be941ddeb66f2dff10e4850bf4fc794d6a918af8ff09556b330c5fc566f9a7f9e473ff57de7c8de1a4c3be11419f09077943baf9a7c1487d89feb346179  $pkgname-$_commit.tar.gz
+5bdfd6a7731feb3016a86880e8a11cbe3a137d62f688370486fccce624ded125c132192053ccac19668c52b6437878fd3dbab6e188303386c4932b363761068e  $_config
+"

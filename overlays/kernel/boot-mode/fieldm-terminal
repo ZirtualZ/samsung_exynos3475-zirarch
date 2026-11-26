@@ -1,0 +1,10 @@
+#!/bin/sh
+exec /usr/bin/xterm \
+	-fa "monospace:size=14" \
+	-fs 14 \
+	-bg "#0b1018" \
+	-fg "#f2f5f7" \
+	-cr "#6fd3b9" \
+	-title "Terminal" \
+	-geometry 48x18 \
+	"$@"

@@ -1,0 +1,169 @@
+#!/bin/sh
+set -u
+
+interface=wlan0
+network_id=
+
+usage()
+{
+	echo "Usage:" >&2
+	echo "  wifi scan" >&2
+	echo "  wifi connect \"SSID\"" >&2
+	echo "  wifi connect --open \"SSID\"" >&2
+	echo "  wifi status" >&2
+	exit "${1:-1}"
+}
+
+fail()
+{
+	echo "wifi: $*" >&2
+	exit 1
+}
+
+cleanup_failed_network()
+{
+	[ -n "$network_id" ] &&
+		wpa_cli -i "$interface" remove_network "$network_id" >/dev/null 2>&1
+}
+
+check_ok()
+{
+	[ "$1" = OK ] || return 1
+}
+
+quote_wpa()
+{
+	escaped=$(printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g')
+	printf '"%s"' "$escaped"
+}
+
+ensure_wifi()
+{
+	[ "$(id -u)" = 0 ] || fail "run as root"
+	[ -d "/sys/class/net/$interface" ] ||
+		fail "$interface is unavailable; run 'rc-service wifi-link start'"
+	ip link set "$interface" up ||
+		fail "could not bring $interface up"
+	wpa_cli -i "$interface" status >/dev/null 2>&1 ||
+		fail "wpa_supplicant is not running; run 'rc-service wpa_supplicant start'"
+}
+
+scan_wifi()
+{
+	ensure_wifi
+	wpa_cli -i "$interface" scan >/dev/null ||
+		fail "scan failed"
+	sleep 5
+	echo "SIGNAL  SECURITY      SSID"
+	echo "------  ------------  ------------------------------"
+	wpa_cli -i "$interface" scan_results |
+		awk -F '\t' 'NR > 1 {
+			security = ($4 == "[ESS]" ? "open" : $4)
+			gsub(/^\[/, "", security)
+			gsub(/\].*$/, "", security)
+			printf "%6s  %-12s  %s\n", $3, security, $5
+		}'
+}
+
+connect_wifi()
+{
+	open_network=0
+	if [ "${1:-}" = --open ]; then
+		open_network=1
+		shift
+	fi
+
+	[ "$#" -ge 1 ] && [ "$#" -le 2 ] || usage 1
+	ssid=$1
+	[ -n "$ssid" ] || fail "SSID cannot be empty"
+
+	ensure_wifi
+	password=
+	if [ "$open_network" -eq 0 ]; then
+		if [ "$#" -eq 2 ]; then
+			password=$2
+			echo "wifi: password passed on the command line is visible to ps" >&2
+		else
+			printf 'Password for "%s" (empty to cancel): ' "$ssid" >&2
+			stty -echo 2>/dev/null || true
+			trap 'stty echo 2>/dev/null || true' HUP INT TERM EXIT
+			read -r password || {
+				stty echo 2>/dev/null || true
+				trap - HUP INT TERM EXIT
+				echo >&2
+				fail "cancelled"
+			}
+			stty echo 2>/dev/null || true
+			trap - HUP INT TERM EXIT
+			echo >&2
+		fi
+		[ -n "$password" ] || fail "cancelled"
+		length=$(printf '%s' "$password" | wc -c)
+		[ "$length" -ge 8 ] && [ "$length" -le 63 ] ||
+			fail "WPA password must contain 8-63 characters"
+	fi
+
+	trap 'cleanup_failed_network' EXIT INT TERM
+	network_id=$(wpa_cli -i "$interface" add_network 2>/dev/null)
+	case "$network_id" in
+		''|*[^0-9]*) fail "could not create Wi-Fi network" ;;
+	esac
+
+	check_ok "$(wpa_cli -i "$interface" set_network "$network_id" \
+		ssid "$(quote_wpa "$ssid")")" ||
+		fail "could not set SSID"
+
+	if [ "$open_network" -eq 1 ]; then
+		check_ok "$(wpa_cli -i "$interface" set_network "$network_id" \
+			key_mgmt NONE)" ||
+			fail "could not configure open network"
+	else
+		check_ok "$(wpa_cli -i "$interface" set_network "$network_id" \
+			psk "$(quote_wpa "$password")")" ||
+			fail "could not configure password"
+	fi
+
+	check_ok "$(wpa_cli -i "$interface" enable_network "$network_id")" &&
+		check_ok "$(wpa_cli -i "$interface" select_network "$network_id")" ||
+		fail "could not select network"
+
+	echo "Connecting to $ssid..."
+	remaining=20
+	while [ "$remaining" -gt 0 ]; do
+		state=$(wpa_cli -i "$interface" status 2>/dev/null |
+			sed -n 's/^wpa_state=//p')
+		[ "$state" = COMPLETED ] && break
+		sleep 1
+		remaining=$((remaining - 1))
+	done
+	[ "$state" = COMPLETED ] ||
+		fail "association timed out (state=${state:-unknown})"
+
+	check_ok "$(wpa_cli -i "$interface" save_config)" ||
+		fail "connected, but could not save the network"
+	network_id=
+	trap - EXIT INT TERM
+
+	echo "Connected. Requesting DHCP lease..."
+	udhcpc -q -n -i "$interface" -t 3 -T 3 ||
+		fail "connected, but DHCP did not obtain a lease"
+	echo "Wi-Fi ready."
+}
+
+case "${1:-}" in
+	-h|--help) usage 0 ;;
+	scan)
+		[ "$#" -eq 1 ] || usage 1
+		scan_wifi
+		;;
+	connect)
+		shift
+		connect_wifi "$@"
+		;;
+	status)
+		[ "$#" -eq 1 ] || usage 1
+		ensure_wifi
+		wpa_cli -i "$interface" status
+		;;
+	*) usage 1 ;;
+esac

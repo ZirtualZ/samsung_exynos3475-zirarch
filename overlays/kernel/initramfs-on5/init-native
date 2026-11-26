@@ -1,0 +1,68 @@
+#!/bin/busybox sh
+
+PATH=/bin:/sbin
+export PATH
+BB=/bin/busybox
+SYSTEM_DEVICE=/dev/block/platform/13540000.dwmmc0/by-name/SYSTEM
+
+rescue()
+{
+	"$BB" echo "$*" > /dev/console
+	"$BB" echo "Entering native-root rescue shell." > /dev/console
+	exec "$BB" sh
+}
+
+wait_for_device()
+{
+	device=$1
+	tries=100
+	while [ ! -b "$device" ] && [ "$tries" -gt 0 ]; do
+		"$BB" sleep 0.1
+		tries=$((tries - 1))
+	done
+	[ -b "$device" ]
+}
+
+"$BB" mount -t proc proc /proc || rescue "Could not mount procfs."
+"$BB" mount -t sysfs sysfs /sys || rescue "Could not mount sysfs."
+"$BB" mount -t devtmpfs devtmpfs /dev 2>/dev/null || true
+"$BB" mkdir -p /dev/pts /newroot
+"$BB" mount -t devpts devpts /dev/pts 2>/dev/null || true
+"$BB" echo 0 > /sys/fs/selinux/enforce 2>/dev/null || true
+
+gadget=/sys/class/android_usb/android0
+tries=50
+while [ ! -d "$gadget" ] && [ "$tries" -gt 0 ]; do
+	"$BB" sleep 0.1
+	tries=$((tries - 1))
+done
+if [ -d "$gadget" ]; then
+	"$BB" echo 0 > "$gadget/enable"
+	"$BB" echo 04e8 > "$gadget/idVendor"
+	"$BB" echo 6863 > "$gadget/idProduct"
+	"$BB" echo Samsung > "$gadget/f_rndis/manufacturer" 2>/dev/null || true
+	"$BB" echo 04e8 > "$gadget/f_rndis/vendorID" 2>/dev/null || true
+	"$BB" echo 1 > "$gadget/f_rndis/wceis" 2>/dev/null || true
+	"$BB" echo rndis > "$gadget/functions"
+	"$BB" echo 224 > "$gadget/bDeviceClass" 2>/dev/null || true
+	"$BB" echo 1 > "$gadget/enable"
+	"$BB" ip link set rndis0 up 2>/dev/null || true
+	"$BB" ip addr add 192.168.7.2/24 dev rndis0 2>/dev/null || true
+fi
+
+# Samsung releases bcmdhd and other deferred drivers through this proc node.
+if [ -r /proc/deferred_initcalls ]; then
+	"$BB" cat /proc/deferred_initcalls >/dev/null 2>&1 || true
+fi
+
+[ -b "$SYSTEM_DEVICE" ] || SYSTEM_DEVICE=/dev/mmcblk0p19
+wait_for_device "$SYSTEM_DEVICE" || rescue "SYSTEM device did not appear."
+"$BB" mount -t ext4 -o rw,relatime "$SYSTEM_DEVICE" /newroot ||
+	rescue "Could not mount SYSTEM at /newroot."
+[ -x /newroot/sbin/init ] || rescue "Missing /newroot/sbin/init."
+
+"$BB" mkdir -p /newroot/dev /newroot/proc /newroot/sys /newroot/run
+"$BB" mount -o move /dev /newroot/dev || rescue "Could not move /dev."
+"$BB" mount -o move /proc /newroot/proc || rescue "Could not move /proc."
+"$BB" mount -o move /sys /newroot/sys || rescue "Could not move /sys."
+exec "$BB" switch_root /newroot /sbin/init

@@ -1,0 +1,30 @@
+# Reference: https://postmarketos.org/devicepkg
+maintainer=""
+pkgname=device-samsung-on5ltetmo
+pkgdesc="Samsung Galaxy On5 (T-Mobile)"
+pkgver=1
+pkgrel=0
+url="https://postmarketos.org"
+license="MIT"
+arch="armv7"
+options="!check !archcheck"
+depends="
+	linux-samsung-on5ltetmo
+	mkbootimg
+	postmarketos-base
+	postmarketos-base-downstream
+"
+makedepends="devicepkg-dev"
+source="deviceinfo"
+
+build() {
+	devicepkg_build "$startdir" "$pkgname"
+}
+
+package() {
+	devicepkg_package "$startdir" "$pkgname"
+}
+
+sha512sums="
+ba165bb359b29031cd7f043f21db003f3f7553753e6e4a242a95fee4cf9e4d5207f1fbf48095d1ae2d85a6ce9695527e5e831c99519d22c9cc24aeae10119270  deviceinfo
+"

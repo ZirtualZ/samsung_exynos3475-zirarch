@@ -1,0 +1,11 @@
+#!/sbin/openrc-run
+
+description="Drive DECON refresh for the Xorg fbdev shadow framebuffer"
+command="/usr/bin/zirarch-x11-refresh"
+command_background=true
+pidfile="/run/zirarch-x11-refresh.pid"
+
+depend()
+{
+	need devfs
+}

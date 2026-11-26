@@ -1,0 +1,64 @@
+#!/bin/busybox sh
+
+/bin/busybox mount -t proc proc /proc
+/bin/busybox mount -t sysfs sysfs /sys
+/bin/busybox mount -t devtmpfs devtmpfs /dev 2>/dev/null || true
+
+export PATH=/bin:/sbin
+export HOME=/root
+export TERM=linux
+/bin/busybox --install -s /bin
+
+LOG=/cache/zirarch-init.log
+mount -o rw /dev/mmcblk0p20 /cache 2>/dev/null || true
+{
+	echo "Zirarch init started"
+	date
+	echo "kernel: $(uname -a)"
+	echo "devices:"
+	ls -l /dev/fb* /dev/tty0 /sys/class/graphics/fb0 /sys/devices/14800000.dsim/backlight/panel/brightness 2>&1
+} > "$LOG" 2>&1 || true
+
+(
+	sleep 2
+	echo 4 > /sys/class/graphics/fb0/blank 2>/dev/null || true
+	echo "blank=4: $(cat /sys/class/graphics/fb0/blank 2>/dev/null)" >> "$LOG" 2>&1 || true
+	sleep 1
+	echo 0 > /sys/class/graphics/fb0/blank 2>/dev/null || true
+	echo "blank=0: $(cat /sys/class/graphics/fb0/blank 2>/dev/null)" >> "$LOG" 2>&1 || true
+	sleep 1
+	echo 255 > /sys/devices/14800000.dsim/backlight/panel/brightness 2>/dev/null || true
+	echo "brightness: $(cat /sys/devices/14800000.dsim/backlight/panel/brightness 2>/dev/null)" >> "$LOG" 2>&1 || true
+	echo 0 > /sys/class/graphics/fb0/blank 2>/dev/null || true
+	for device in /sys/class/backlight/*; do
+		[ -d "$device" ] || continue
+		[ -r "$device/max_brightness" ] || continue
+		/bin/busybox cat "$device/max_brightness" > "$device/brightness" 2>/dev/null || true
+		echo 0 > "$device/bl_power" 2>/dev/null || true
+	done
+) &
+
+echo 4 > /sys/class/graphics/fb0/blank 2>/dev/null || true
+sleep 1
+echo 0 > /sys/class/graphics/fb0/blank 2>/dev/null || true
+sleep 1
+echo 162 > /sys/devices/14800000.dsim/backlight/panel/brightness 2>/dev/null || true
+echo "foreground display reset complete" >> "$LOG" 2>&1 || true
+
+clear
+printf "\033[2J\033[H"
+echo "Zirarch minimal ARM Linux"
+echo "========================="
+echo
+uname -a
+echo
+echo "Android userspace is not running."
+echo "Type commands at the shell below. Power off/recovery remains available by rebooting."
+echo
+
+while true; do
+	setsid cttyhack /bin/sh -i < /dev/tty0 > /dev/tty0 2>&1
+	echo
+	echo "Shell exited; restarting."
+	sleep 1
+done

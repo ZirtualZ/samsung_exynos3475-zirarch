@@ -1,0 +1,47 @@
+#!/sbin/openrc-run
+
+description="TTY or FieldM graphical boot selector"
+command="/usr/bin/zirarch-boot-mode"
+command_background=true
+pidfile="/run/zirarch-boot-mode.pid"
+
+depend()
+{
+	need devfs
+	after local networking
+}
+
+stop()
+{
+	rc-service buffyboard stop 2>/dev/null || true
+	start-stop-daemon --stop --pidfile /run/zirarch-tty1.pid 2>/dev/null || true
+	if [ -s /run/fieldm-desktop.pid ]; then
+		desktop_pid=$(cat /run/fieldm-desktop.pid)
+		case "$desktop_pid" in
+			''|*[!0-9]*) desktop_pid= ;;
+		esac
+		if [ -n "$desktop_pid" ]; then
+			kill -TERM "$desktop_pid" 2>/dev/null || true
+			for delay in 1 2 3 4 5; do
+				kill -0 "$desktop_pid" 2>/dev/null || break
+				sleep 1
+			done
+			kill -KILL "$desktop_pid" 2>/dev/null || true
+		fi
+		rm -f /run/fieldm-desktop.pid
+	fi
+	if [ -s "$pidfile" ]; then
+		session_pid=$(cat "$pidfile")
+		case "$session_pid" in
+			''|*[!0-9]*) session_pid= ;;
+		esac
+		if [ -n "$session_pid" ]; then
+			kill -TERM "$session_pid" 2>/dev/null || true
+			for delay in 1 2 3 4 5; do
+				kill -0 "$session_pid" 2>/dev/null || break
+				sleep 1
+			done
+			kill -KILL "$session_pid" 2>/dev/null || true
+		fi
+	fi
+}

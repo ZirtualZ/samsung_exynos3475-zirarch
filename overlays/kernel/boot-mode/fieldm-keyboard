@@ -1,0 +1,53 @@
+#!/bin/sh
+set -u
+
+state_dir=/run/fieldm-keyboard
+pidfile="$state_dir/pid"
+mkdir -p "$state_dir"
+DISPLAY=${DISPLAY:-:0}
+export DISPLAY
+
+reconcile()
+{
+	visible=0
+	[ -e "$state_dir/manual" ] && visible=1
+	[ -e "$state_dir/entry" ] && visible=1
+	[ -e "$state_dir/terminal" ] && visible=1
+
+	if [ "$visible" -eq 1 ]; then
+		pid=
+		[ -s "$pidfile" ] && read -r pid < "$pidfile"
+		if [ -z "$pid" ] || ! kill -0 "$pid" 2>/dev/null; then
+			svkbd-mobile-intl -d -g 720x300+0-0 &
+			echo $! > "$pidfile"
+		fi
+	else
+		pid=
+		[ -s "$pidfile" ] && read -r pid < "$pidfile"
+		[ -z "$pid" ] || kill "$pid" 2>/dev/null || true
+		rm -f "$pidfile"
+	fi
+}
+
+lease=${1:-manual}
+action=${2:-toggle}
+
+case "$lease" in
+	manual|entry|terminal) ;;
+	*) exit 1 ;;
+esac
+
+case "$action" in
+	on) touch "$state_dir/$lease" ;;
+	off) rm -f "$state_dir/$lease" ;;
+	toggle)
+		if [ -e "$state_dir/$lease" ]; then
+			rm -f "$state_dir/$lease"
+		else
+			touch "$state_dir/$lease"
+		fi
+		;;
+	*) exit 1 ;;
+esac
+
+reconcile

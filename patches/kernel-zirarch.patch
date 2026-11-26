@@ -1,0 +1,154 @@
+diff --git a/arch/arm/configs/lineage-on5ltetmo_defconfig b/arch/arm/configs/lineage-on5ltetmo_defconfig
+index c941abdf6..e1219252c 100644
+--- a/arch/arm/configs/lineage-on5ltetmo_defconfig
++++ b/arch/arm/configs/lineage-on5ltetmo_defconfig
+@@ -29,8 +29,8 @@ CONFIG_BUILDTIME_EXTABLE_SORT=y
+ #
+ CONFIG_INIT_ENV_ARG_LIMIT=32
+ CONFIG_CROSS_COMPILE=""
+-CONFIG_LOCALVERSION="-lineageos"
+-CONFIG_LOCALVERSION_AUTO=y
++CONFIG_LOCALVERSION="-zirarch"
++# CONFIG_LOCALVERSION_AUTO is not set
+ CONFIG_HAVE_KERNEL_GZIP=y
+ CONFIG_HAVE_KERNEL_LZMA=y
+ CONFIG_HAVE_KERNEL_XZ=y
+@@ -730,7 +730,7 @@ CONFIG_IPV6_MULTIPLE_TABLES=y
+ # CONFIG_IPV6_SUBTREES is not set
+ # CONFIG_IPV6_MROUTE is not set
+ # CONFIG_NETLABEL is not set
+-CONFIG_ANDROID_PARANOID_NETWORK=y
++# CONFIG_ANDROID_PARANOID_NETWORK is not set
+ CONFIG_NET_ACTIVITY_STATS=y
+ CONFIG_NETWORK_SECMARK=y
+ # CONFIG_NETWORK_PHY_TIMESTAMPING is not set
+@@ -2439,7 +2439,7 @@ CONFIG_EXYNOS_DECON_FB=y
+ CONFIG_DECON_MIPI_DSI_CLK_SWITCH=y
+ # CONFIG_DECON_DEVFREQ is not set
+ # CONFIG_DECON_BLOCKING_MODE is not set
+-# CONFIG_DECON_USE_BOOTLOADER_FB is not set
++CONFIG_DECON_USE_BOOTLOADER_FB=y
+ # CONFIG_DECON_EVENT_LOG is not set
+ CONFIG_EXYNOS3475_DECON_DISP_LCD=y
+ # CONFIG_PANEL_AID_DIMMING is not set
+@@ -2482,7 +2482,8 @@ CONFIG_BACKLIGHT_GENERIC=y
+ # Console display driver support
+ #
+ CONFIG_DUMMY_CONSOLE=y
+-# CONFIG_FRAMEBUFFER_CONSOLE is not set
++CONFIG_FRAMEBUFFER_CONSOLE=y
++CONFIG_FRAMEBUFFER_CONSOLE_DETECT_PRIMARY=y
+ # CONFIG_LOGO is not set
+ # CONFIG_FB_SSD1307 is not set
+ CONFIG_SOUND=y
+diff --git a/drivers/input/touchscreen/melfas_mms400/melfas_mms400.c b/drivers/input/touchscreen/melfas_mms400/melfas_mms400.c
+index 63e5042af..5fce789ed 100755
+--- a/drivers/input/touchscreen/melfas_mms400/melfas_mms400.c
++++ b/drivers/input/touchscreen/melfas_mms400/melfas_mms400.c
+@@ -923,9 +923,10 @@ static int mms_probe(struct i2c_client *client, const struct i2c_device_id *id)
+ 
+ #ifdef CONFIG_BATTERY_SAMSUNG
+ 	if (lpcharge == 1) {
+-		tsp_debug_err(true, &client->dev, "%s : Do not load driver due to : lpm %d\n",
+-			 __func__, lpcharge);
+-		return -ENODEV;
++		/* Zirarch is a full native OS even when booted over USB power. */
++		tsp_debug_info(true, &client->dev,
++			"%s : keeping touchscreen active in charger boot mode\n",
++			__func__);
+ 	}
+ #endif
+ 
+diff --git a/drivers/video/exynos/decon_3475/decon-int_drv.c b/drivers/video/exynos/decon_3475/decon-int_drv.c
+index 43af47bc5..d0e991e51 100755
+--- a/drivers/video/exynos/decon_3475/decon-int_drv.c
++++ b/drivers/video/exynos/decon_3475/decon-int_drv.c
+@@ -618,21 +618,18 @@ int decon_setcolreg(unsigned regno,
+ }
+ EXPORT_SYMBOL(decon_setcolreg);
+ 
+-static void decon_activate_window_dma(struct decon_device *decon, unsigned int index)
+-{
+-	decon_reg_direct_on_off(DECON_INT, 1);
+-	decon_reg_update_standalone(DECON_INT);
+-}
+-
+ int decon_pan_display(struct fb_var_screeninfo *var, struct fb_info *info)
+ {
+ 	int ret = 0;
+ 	struct decon_win *win = info->par;
+ 	struct decon_device *decon = win->decon;
++	struct decon_psr_info psr;
+ 	unsigned int start_boff, end_boff;
+ 
+ 	if (decon->state == DECON_STATE_OFF)
+ 		return ret;
++	if (decon->state == DECON_STATE_INIT)
++		return -EBUSY;
+ 
+ 	decon_lpd_block_exit(decon);
+ 
+@@ -661,6 +658,18 @@ int decon_pan_display(struct fb_var_screeninfo *var, struct fb_info *info)
+ 	/* Offset in bytes to the end of the displayed area */
+ 	end_boff = start_boff + info->var.yres * info->fix.line_length;
+ 
++	if (win->index == 0) {
++		ret = decon_set_par(info);
++		if (ret)
++			goto pan_display_exit;
++		decon->win_regs.vidw_buf_start =
++			info->fix.smem_start + start_boff;
++		decon->win_regs.vidw_whole_w = var->xres_virtual;
++		decon->win_regs.vidw_whole_h = var->yres_virtual;
++		decon->win_regs.vidw_offset_x = var->xoffset;
++		decon->win_regs.vidw_offset_y = var->yoffset;
++	}
++
+ 	/* Temporarily turn off per-vsync update from shadow registers until
+ 	 * both start and end addresses are updated to prevent corruption */
+ 	decon_reg_shadow_protect_win(DECON_INT, win->index, 1);
+@@ -672,7 +681,8 @@ int decon_pan_display(struct fb_var_screeninfo *var, struct fb_info *info)
+ 	decon_reg_shadow_protect_win(DECON_INT, win->index, 0);
+ 
+ 	decon_reg_activate_window(DECON_INT, win->index);
+-	decon_activate_window_dma(decon, win->index);
++	decon_to_psr_info(decon, &psr);
++	decon_reg_start(DECON_INT, decon->pdata->dsi_mode, &psr);
+ 
+ 	if (decon->pdata->trig_mode == DECON_HW_TRIG)
+ 		decon_reg_set_trigger(DECON_INT, decon->pdata->dsi_mode,
+diff --git a/drivers/video/exynos/decon_3475/decon_core.c b/drivers/video/exynos/decon_3475/decon_core.c
+index db65f0580..5e39de9cc 100755
+--- a/drivers/video/exynos/decon_3475/decon_core.c
++++ b/drivers/video/exynos/decon_3475/decon_core.c
+@@ -841,9 +841,8 @@ int decon_enable(struct decon_device *decon)
+ 		mutex_lock(&decon->output_lock);
+ 
+ 	if ((decon->out_type == DECON_OUT_DSI) && (decon->state == DECON_STATE_INIT)) {
+-		decon_info("decon in init state\n");
++		decon_info("decon initialized by bootloader\n");
+ 		decon->state = DECON_STATE_ON;
+-		ret = -EBUSY;
+ 		goto err;
+ 	}
+ 
+diff --git a/scripts/setlocalversion b/scripts/setlocalversion
+index 84b88f109..9684a2269 100755
+--- a/scripts/setlocalversion
++++ b/scripts/setlocalversion
+@@ -162,15 +162,6 @@ res="${res}${CONFIG_LOCALVERSION}${LOCALVERSION}"
+ if test "$CONFIG_LOCALVERSION_AUTO" = "y"; then
+ 	# full scm version string
+ 	res="$res$(scm_version)"
+-else
+-	# append a plus sign if the repository is not in a clean
+-	# annotated or signed tagged state (as git describe only
+-	# looks at signed or annotated tags - git tag -a/-s) and
+-	# LOCALVERSION= is not specified
+-	if test "${LOCALVERSION+set}" != "set"; then
+-		scm=$(scm_version --short)
+-		res="$res${scm:++}"
+-	fi
+ fi
+ 
+ echo "$res"

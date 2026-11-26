@@ -1,0 +1,3 @@
+#!/bin/sh
+echo $$ > /run/fieldm-desktop.pid
+exec simple-desktop --x-session

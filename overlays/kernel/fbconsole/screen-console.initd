@@ -1,0 +1,21 @@
+#!/sbin/openrc-run
+
+description="Framebuffer console on the Samsung display"
+command="/usr/bin/zirarch-fbconsole"
+command_background=true
+pidfile="/run/zirarch-fbconsole.pid"
+
+depend()
+{
+	need devfs
+	after usb-gadget
+}
+
+start_pre()
+{
+	echo 4 > /sys/class/graphics/fb0/blank || return 1
+	sleep 1
+	echo 0 > /sys/class/graphics/fb0/blank || return 1
+	echo 255 > /sys/devices/14800000.dsim/backlight/panel/brightness \
+		2>/dev/null || return 1
+}

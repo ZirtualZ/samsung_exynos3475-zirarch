@@ -1,0 +1,2523 @@
+diff --git a/Makefile b/Makefile
+index 70a1c03..94c609d 100644
+--- a/Makefile
++++ b/Makefile
+@@ -1,6 +1,6 @@
+ CC ?= cc
+ CFLAGS ?= -O2 -Wall -Wextra -Wpedantic
+-LDLIBS += -lX11 -lXrandr
++LDLIBS += -lX11
+ PKG_CONFIG ?= pkg-config
+ GTK_CFLAGS = $(shell $(PKG_CONFIG) --cflags 'gtk4 >= 4.12' 2>/dev/null)
+ GTK_LIBS = $(shell $(PKG_CONFIG) --libs 'gtk4 >= 4.12' 2>/dev/null)
+@@ -15,14 +15,15 @@ DESTDIR ?=
+ 
+ all: simple-desktop simple-wm
+ 
+-DESKTOP_SOURCES = src/desktop.c src/applications.c src/desktop_items.c \
+-	src/appearance.c src/monitor_layout.c src/shell/session.c \
++DESKTOP_SOURCES = src/desktop.c src/applications.c \
++	src/appearance.c src/screen_layout.c src/shell/session.c \
+ 	src/shell/gtk_shell.c src/shell/desktop_view.c src/shell/launcher.c \
+-	src/shell/settings.c src/shell/icon_themes.c
+-DESKTOP_HEADERS = src/applications.h src/desktop_items.h src/appearance.h \
+-	src/monitor_layout.h src/shell/session.h src/shell/gtk_shell.h \
++	src/shell/settings.c src/shell/icon_themes.c src/shell/icon_badge.c
++DESKTOP_HEADERS = src/applications.h src/appearance.h \
++	src/screen_layout.h src/shell/session.h src/shell/gtk_shell.h \
+ 	src/shell/gtk_shell_internal.h src/shell/desktop_view.h \
+-	src/shell/launcher.h src/shell/settings.h src/shell/icon_themes.h
++	src/shell/launcher.h src/shell/settings.h src/shell/icon_themes.h \
++	src/shell/icon_badge.h
+ 
+ check-gtk:
+ 	@command -v "$(PKG_CONFIG)" >/dev/null 2>&1 || { \
+@@ -42,9 +43,9 @@ simple-desktop: $(DESKTOP_SOURCES) $(DESKTOP_HEADERS) | check-gtk
+ 	$(CC) $(CFLAGS) $(GTK_CFLAGS) -std=c11 -o $@ $(DESKTOP_SOURCES) \
+ 		$(LDLIBS) $(GTK_LIBS)
+ 
+-simple-wm: src/wm.c src/monitor_layout.c src/monitor_layout.h
++simple-wm: src/wm.c src/screen_layout.c src/screen_layout.h
+ 	$(CC) $(CFLAGS) $(XFT_CFLAGS) -std=c11 -o $@ \
+-		src/wm.c src/monitor_layout.c $(LDLIBS) $(XFT_LIBS)
++		src/wm.c src/screen_layout.c $(LDLIBS) $(XFT_LIBS)
+ 
+ install: all
+ 	install -Dm755 simple-desktop "$(DESTDIR)$(BINDIR)/simple-desktop"
+diff --git a/README.md b/README.md
+index 926fc0d..b20e64f 100644
+--- a/README.md
++++ b/README.md
+@@ -1,22 +1,23 @@
+-# Field Desktop
++# FieldM
+ 
+-Field Desktop is a lightweight desktop environment for Linux and X11. Its
+-desktop shell uses GTK 4, paired with a small custom floating window manager.
+-The interface follows a familiar panel-and-taskbar layout with a searchable
+-application launcher and focused settings.
++FieldM is a touch-first, single-screen fork of [Field
++Desktop](https://github.com/ZirtualZ/Field-Desktop), intended for a 720x1280
++portrait X11 touchscreen. It retains the GTK 4 shell and custom window manager
++while enlarging controls, maximizing application windows, and supporting tap
++and drag gestures directly through normal X11 button events.
+ 
+ ## Features
+ 
+-- GTK desktop with an application panel, common shortcuts, and Desktop-folder
+-  items.
++- GTK shell with a three-button mobile panel and large common launch shortcuts.
+ - Searchable application launcher, including the window manager's `Alt+Space`
+-  shortcut.
+-- Separate floating window manager with taskbar, switcher, move/resize
+-  controls, and keyboard shortcuts.
+-- Per-monitor desktop surfaces and taskbars, with the current primary display
+-  indicated in the panel.
+-- Settings for color themes, solid backgrounds, image wallpaper, desktop
+-  items, panel, and taskbar.
++  shortcut and single-tap activation.
++- Window manager with large title bars and close targets, portrait-screen
++  maximization, taskbar switching, touch drag movement/resizing, and fullscreen
++  handling.
++- A **Keyboard** panel button and automatic keyboard leases for text entry and
++  terminal windows.
++- Settings for color themes, solid backgrounds, image wallpaper, panel, and
++  taskbar.
+ 
+ Field Desktop launches installed applications rather than bundling a browser,
+ file manager, or terminal. The project targets Linux and X11.
+@@ -27,23 +28,36 @@ Build requirements:
+ 
+ - A C11 compiler and `make`.
+ - GTK 4.12 or newer with its X11 backend.
+-- Xlib, XRandR, and Xft development libraries.
++- Xlib and Xft development libraries.
+ - `pkg-config`.
+ 
+ To run a complete session, install an X server and a terminal emulator. A file
+ manager and browser are optional; installed applications are used when
+ available.
+ 
++FieldM delegates keyboard lifecycle to `/usr/bin/fieldm-keyboard`; it does not
++manage `svkbd` processes directly. The runtime helper should support:
++
++- `fieldm-keyboard entry on|off` while the launcher search field owns focus.
++- `fieldm-keyboard manual toggle` from the panel button.
++- `fieldm-keyboard terminal on|off` while managed terminal windows exist.
++
++The helper is required only at runtime and is intentionally outside this
++project's build/install scope.
++
+ Example packages:
+ 
+ ```sh
+ # Arch Linux
+-sudo pacman -S --needed base-devel pkgconf gtk4 libx11 libxrandr libxft \
++sudo pacman -S --needed base-devel pkgconf gtk4 libx11 libxft \
+   xorg-server xorg-xinit xfce4-terminal
+ 
+ # Debian and Ubuntu
+ sudo apt install build-essential pkg-config libgtk-4-dev libx11-dev \
+-  libxrandr-dev libxft-dev xserver-xorg xinit xfce4-terminal
++  libxft-dev xserver-xorg xinit xfce4-terminal
++
++# Alpine Linux (armv7/musl target)
++sudo apk add gcc musl-dev make pkgconf gtk4.0-dev libx11-dev libxft-dev
+ ```
+ 
+ ## Build
+@@ -82,7 +96,8 @@ starts its custom window manager.
+ You can also run `./simple-desktop` directly from a TTY. When started inside an
+ existing graphical session, Field Desktop uses that session's window manager;
+ it cannot take over a display already managed by another window manager.
+-Press **Escape** to exit the desktop session.
++Pressing **Escape** with no launcher or settings open is ignored, so device
++Back does not terminate the desktop session.
+ 
+ ## Install as a login session
+ 
+@@ -111,7 +126,8 @@ make install DESTDIR=/tmp/package-root
+ | Action | Control |
+ | --- | --- |
+ | Open the application launcher | `Alt+Space` or click **Applications** |
+-| Filter apps / navigate results / launch | Type / `Up` or `Down` / `Enter` |
++| Filter apps / navigate results / launch | Tap search/results, or type / `Up` or `Down` / `Enter` |
++| Toggle the on-screen keyboard | Tap **Keyboard** |
+ | Close the launcher | `Escape` |
+ 
+ ### Window Management
+@@ -122,8 +138,8 @@ make install DESTDIR=/tmp/package-root
+ | Cycle backward | `Alt+Shift+Tab` |
+ | Dismiss the switcher | `Alt+Escape` |
+ | Close the focused window | `Alt+F4` |
+-| Move a window | Drag its title bar, or `Alt` + left-drag |
+-| Resize a window | Drag its bottom/right edge/corner; or `Alt` + right-drag |
++| Move a window | Drag its title bar (tap/drag or mouse; no modifier required) |
++| Resize a window | Drag its bottom/right edge/corner (no modifier required) |
+ 
+ ### Notes
+ 
+@@ -134,7 +150,9 @@ make install DESTDIR=/tmp/package-root
+ - Application commands are started directly, without a shell.
+ - Applications marked `Terminal=true` are opened in a supported installed terminal emulator.
+ - The Terminal shortcut prefers installed applications categorized as `TerminalEmulator`.
+-- Arbitrary executable files on the desktop are not run directly.
++- Launcher cards always render a 56×56 letter badge; a GTK icon overlays it
++  only when that icon actually exists in the active theme.
++- Desktop-folder files are not enumerated by FieldM.
+ 
+ ## Settings
+ 
+@@ -147,11 +165,16 @@ Select a built-in color theme, solid background, image wallpaper, and installed
+ 
+ ### Desktop Page
+ 
+-Toggle the top panel, Desktop-folder items, and the window manager's taskbar. Changes apply immediately and are saved under `~/.config/simple-desktop/`.
++Toggle the top panel and the window manager's taskbar. Changes apply immediately
++and are saved under `~/.config/simple-desktop/`.
+ 
+ ### Display Notes
+ 
+-Each active display gets its own desktop surface, top panel, and taskbar. The window manager handles window placement, task switching, and taskbar rendering; the GTK shell owns the desktop, launcher, and settings surfaces.
++FieldM uses the X11 screen reported by Xlib as one display. Newly managed
++windows fill the portrait work area; fullscreen requests occupy the full
++screen. The window manager handles window placement, task switching, and
++taskbar rendering; the GTK shell owns the desktop, launcher, and settings
++surfaces.
+ 
+ ## Project layout
+ 
+@@ -163,7 +186,7 @@ Each active display gets its own desktop surface, top panel, and taskbar. The wi
+ │   ├── shell/            # GTK shell and X-session lifecycle
+ │   ├── applications.c    # Installed application discovery and launching
+ │   ├── appearance.c      # Theme and wallpaper preferences
+-│   ├── desktop_items.c   # Desktop-folder discovery and opening
++│   ├── screen_layout.c   # Single-screen X11 geometry
+ │   └── wm.c              # Floating window manager
+ ├── tests/                # Application-entry and X11 characterization tests
+ ├── Makefile
+@@ -184,12 +207,6 @@ claims that the features already exist.
+   GTK event loop for application launches, path opens, and fallback launches.
+   Verify that repeatedly starting short-lived commands does not leave zombie
+   processes and that long-running applications remain independent.
+-- **Recover when the Desktop folder is created after startup.**
+-  `desktop_items_init()` treats a missing `~/Desktop` as a successful empty
+-  refresh, then cannot attach an inotify watch to that missing directory.
+-  Watch its parent or retry/recreate the watch so creating the folder and
+-  adding items during a session updates the desktop without a restart. Cover
+-  both initially missing folders and a folder removed and recreated later.
+ - **Handle the window-manager client limit safely.** `manage_window()` in
+   `src/wm.c` returns without mapping a new window when `MAX_CLIENTS` (128) is
+   reached, leaving the requested window invisible. Grow the managed-client
+@@ -198,12 +215,6 @@ claims that the features already exist.
+ 
+ ### Medium priority
+ 
+-- **Keep newly mapped windows reachable.** `manage_window()` clamps initial
+-  positions only at the right and bottom edges; negative positions can leave a
+-  title bar off-screen. Clamp both axes to the selected monitor's usable
+-  bounds, while preserving intended placement where possible. Test windows
+-  requesting negative coordinates and layouts with monitors positioned left
+-  or above the primary display.
+ - **Honor `XDG_CONFIG_HOME` for preferences.** The feature and appearance
+   settings paths in `src/shell/gtk_shell.c` and `src/appearance.c` are built
+   directly from `HOME/.config`, even when `XDG_CONFIG_HOME` is set. Resolve
+@@ -211,8 +222,7 @@ claims that the features already exist.
+   reads and writes. Verify custom-directory round trips and the default-path
+   behavior.
+ - **Make collection limits visible or remove them.** Application discovery
+-  stops at 512 entries, Desktop-folder discovery at 256, monitor discovery
+-  at 16, and the window manager has a 128-client limit. Several callers
++  stops at 512 entries and the window manager has a 128-client limit. Callers
+   silently truncate at capacity. Prefer dynamically sized collections where
+   practical, or report a clear limit and expose the omitted-item count. Test
+   each collection at and beyond its limit.
+@@ -229,7 +239,7 @@ claims that the features already exist.
+ - **Expand fast automated tests for the core modules.**
+   `make check-applications` now checks that `Terminal=true` metadata is
+   retained, but application launch argument construction, preference
+-  persistence, Desktop-folder refresh behavior, and window-placement bounds
++  persistence, keyboard process toggling, and window-placement bounds
+   still lack focused coverage. Add tests for these areas so core regressions
+   can be checked without a full desktop session. The separate
+   `tests/characterize.sh` X11 smoke/recording test depends on Xephyr, xdotool,
+@@ -242,4 +252,4 @@ claims that the features already exist.
+ 
+ ## License
+ 
+-Field Desktop is licensed under the [MIT License](LICENSE).
++FieldM is licensed under the [MIT License](LICENSE).
+diff --git a/src/desktop_items.c b/src/desktop_items.c
+deleted file mode 100644
+index 1516eb7..0000000
+--- a/src/desktop_items.c
++++ /dev/null
+@@ -1,188 +0,0 @@
+-#define _POSIX_C_SOURCE 200809L
+-
+-#include "desktop_items.h"
+-
+-#include "applications.h"
+-
+-#include <dirent.h>
+-#include <errno.h>
+-#include <limits.h>
+-#include <stdio.h>
+-#include <stdlib.h>
+-#include <string.h>
+-#include <strings.h>
+-#include <sys/inotify.h>
+-#include <sys/stat.h>
+-#include <unistd.h>
+-
+-static int compare_items(const void *left, const void *right)
+-{
+-    const DesktopItem *first = left;
+-    const DesktopItem *second = right;
+-    if (first->is_directory != second->is_directory) {
+-        return second->is_directory - first->is_directory;
+-    }
+-    return strcasecmp(first->name, second->name);
+-}
+-
+-int desktop_items_refresh(DesktopItems *desktop)
+-{
+-    if (desktop == NULL || desktop->items == NULL || desktop->directory[0] == '\0') {
+-        return 0;
+-    }
+-    DIR *directory = opendir(desktop->directory);
+-    if (directory == NULL) {
+-        if (errno != ENOENT) {
+-            perror("Could not read Desktop folder");
+-        } else {
+-            desktop->count = 0;
+-        }
+-        return errno == ENOENT;
+-    }
+-
+-    size_t count = 0;
+-    struct dirent *entry;
+-    while ((entry = readdir(directory)) != NULL && count < desktop->capacity) {
+-        if (entry->d_name[0] == '.') {
+-            continue;
+-        }
+-        char path[DESKTOP_ITEM_PATH_SIZE];
+-        int length = snprintf(path, sizeof(path), "%s/%s",
+-                              desktop->directory, entry->d_name);
+-        if (length < 0 || (size_t)length >= sizeof(path)) {
+-            continue;
+-        }
+-        struct stat attributes;
+-        if (stat(path, &attributes) != 0) {
+-            continue;
+-        }
+-        DesktopItem *item = &desktop->items[count];
+-        snprintf(item->name, sizeof(item->name), "%s", entry->d_name);
+-        snprintf(item->path, sizeof(item->path), "%s", path);
+-        item->is_directory = S_ISDIR(attributes.st_mode);
+-        size_t name_length = strlen(entry->d_name);
+-        item->is_desktop_entry = name_length > 8 &&
+-            strcmp(entry->d_name + name_length - 8, ".desktop") == 0;
+-        ++count;
+-    }
+-    closedir(directory);
+-    qsort(desktop->items, count, sizeof(*desktop->items), compare_items);
+-    desktop->count = count;
+-    return 1;
+-}
+-
+-int desktop_items_init(DesktopItems *desktop, size_t capacity)
+-{
+-    if (desktop == NULL || capacity == 0) {
+-        return 0;
+-    }
+-    memset(desktop, 0, sizeof(*desktop));
+-    desktop->watch_fd = -1;
+-    desktop->watch_id = -1;
+-    const char *home = getenv("HOME");
+-    if (home == NULL || home[0] == '\0') {
+-        fprintf(stderr, "Desktop folder unavailable: HOME is not set.\n");
+-        return 0;
+-    }
+-    int length = snprintf(desktop->directory, sizeof(desktop->directory),
+-                          "%s/Desktop", home);
+-    if (length < 0 || (size_t)length >= sizeof(desktop->directory)) {
+-        fprintf(stderr, "Desktop folder path is too long.\n");
+-        return 0;
+-    }
+-    desktop->items = calloc(capacity, sizeof(*desktop->items));
+-    if (desktop->items == NULL) {
+-        perror("Could not allocate Desktop folder items");
+-        return 0;
+-    }
+-    desktop->capacity = capacity;
+-    if (!desktop_items_refresh(desktop)) {
+-        free(desktop->items);
+-        memset(desktop, 0, sizeof(*desktop));
+-        desktop->watch_fd = -1;
+-        desktop->watch_id = -1;
+-        return 0;
+-    }
+-
+-    desktop->watch_fd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
+-    if (desktop->watch_fd >= 0) {
+-        desktop->watch_id = inotify_add_watch(
+-            desktop->watch_fd, desktop->directory,
+-            IN_CREATE | IN_DELETE | IN_MOVED_FROM | IN_MOVED_TO |
+-            IN_CLOSE_WRITE | IN_ATTRIB);
+-        if (desktop->watch_id < 0) {
+-            close(desktop->watch_fd);
+-            desktop->watch_fd = -1;
+-        }
+-    }
+-    return 1;
+-}
+-
+-void desktop_items_destroy(DesktopItems *desktop)
+-{
+-    if (desktop == NULL) {
+-        return;
+-    }
+-    if (desktop->watch_fd >= 0) {
+-        if (desktop->watch_id >= 0) {
+-            inotify_rm_watch(desktop->watch_fd, desktop->watch_id);
+-        }
+-        close(desktop->watch_fd);
+-    }
+-    free(desktop->items);
+-    memset(desktop, 0, sizeof(*desktop));
+-    desktop->watch_fd = -1;
+-    desktop->watch_id = -1;
+-}
+-
+-int desktop_items_handle_changes(DesktopItems *desktop)
+-{
+-    if (desktop == NULL || desktop->watch_fd < 0) {
+-        return 0;
+-    }
+-    char events[4096];
+-    int changed = 0;
+-    for (;;) {
+-        ssize_t bytes = read(desktop->watch_fd, events, sizeof(events));
+-        if (bytes < 0) {
+-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+-                break;
+-            }
+-            if (errno == EINTR) {
+-                continue;
+-            }
+-            perror("Could not read Desktop folder changes");
+-            return 0;
+-        }
+-        if (bytes == 0) {
+-            break;
+-        }
+-        changed = 1;
+-    }
+-    return changed ? desktop_items_refresh(desktop) : 0;
+-}
+-
+-const DesktopItem *desktop_items_get(const DesktopItems *desktop, size_t index)
+-{
+-    return desktop != NULL && index < desktop->count
+-        ? &desktop->items[index] : NULL;
+-}
+-
+-int desktop_item_open(const DesktopItem *item,
+-                      const Application *applications, size_t count)
+-{
+-    if (item == NULL || item->path[0] == '\0') {
+-        return 0;
+-    }
+-    if (item->is_desktop_entry) {
+-        Application application;
+-        if (!application_load_desktop_file(item->path, &application, 0)) {
+-            fprintf(stderr, "Desktop entry is not a launchable application: %s\n",
+-                    item->path);
+-            return 0;
+-        }
+-        return application_launch_with_catalog(&application, applications,
+-                                               count);
+-    }
+-    return application_open_path(item->path);
+-}
+diff --git a/src/desktop_items.h b/src/desktop_items.h
+deleted file mode 100644
+index df57865..0000000
+--- a/src/desktop_items.h
++++ /dev/null
+@@ -1,37 +0,0 @@
+-#ifndef FIELD_DESKTOP_DESKTOP_ITEMS_H
+-#define FIELD_DESKTOP_DESKTOP_ITEMS_H
+-
+-#include "applications.h"
+-
+-#include <stddef.h>
+-
+-enum {
+-    DESKTOP_ITEM_NAME_SIZE = 256,
+-    DESKTOP_ITEM_PATH_SIZE = 4096
+-};
+-
+-typedef struct {
+-    char name[DESKTOP_ITEM_NAME_SIZE];
+-    char path[DESKTOP_ITEM_PATH_SIZE];
+-    int is_directory;
+-    int is_desktop_entry;
+-} DesktopItem;
+-
+-typedef struct {
+-    DesktopItem *items;
+-    size_t count;
+-    size_t capacity;
+-    char directory[DESKTOP_ITEM_PATH_SIZE];
+-    int watch_fd;
+-    int watch_id;
+-} DesktopItems;
+-
+-int desktop_items_init(DesktopItems *desktop, size_t capacity);
+-void desktop_items_destroy(DesktopItems *desktop);
+-int desktop_items_refresh(DesktopItems *desktop);
+-int desktop_items_handle_changes(DesktopItems *desktop);
+-const DesktopItem *desktop_items_get(const DesktopItems *desktop, size_t index);
+-int desktop_item_open(const DesktopItem *item,
+-                      const Application *applications, size_t count);
+-
+-#endif
+diff --git a/src/monitor_layout.c b/src/monitor_layout.c
+deleted file mode 100644
+index 2df3cc3..0000000
+--- a/src/monitor_layout.c
++++ /dev/null
+@@ -1,217 +0,0 @@
+-#include "monitor_layout.h"
+-
+-#include <X11/extensions/Xrandr.h>
+-
+-size_t monitor_layout_get(Display *display, Window root,
+-                          MonitorGeometry *monitors, size_t capacity)
+-{
+-    if (display == NULL || monitors == NULL || capacity == 0) {
+-        return 0;
+-    }
+-
+-    int major = 1;
+-    int minor = 5;
+-    if (XRRQueryVersion(display, &major, &minor) &&
+-        (major > 1 || (major == 1 && minor >= 5))) {
+-        int count = 0;
+-        XRRMonitorInfo *active = XRRGetMonitors(display, root, True, &count);
+-        size_t copied = 0;
+-        for (int i = 0; active != NULL && i < count && copied < capacity; ++i) {
+-            if (active[i].width <= 0 || active[i].height <= 0) {
+-                continue;
+-            }
+-            monitors[copied++] = (MonitorGeometry){
+-                active[i].x, active[i].y,
+-                active[i].width, active[i].height
+-            };
+-        }
+-        RROutput primary = XRRGetOutputPrimary(display, root);
+-        for (int i = 0; active != NULL && i < count && copied > 0; ++i) {
+-            for (int output = 0; output < active[i].noutput; ++output) {
+-                if (active[i].outputs[output] == primary) {
+-                    MonitorGeometry primary_monitor = {
+-                        active[i].x, active[i].y,
+-                        active[i].width, active[i].height
+-                    };
+-                    for (size_t j = 0; j < copied; ++j) {
+-                        if (monitors[j].x == primary_monitor.x &&
+-                            monitors[j].y == primary_monitor.y &&
+-                            monitors[j].width == primary_monitor.width &&
+-                            monitors[j].height == primary_monitor.height) {
+-                            MonitorGeometry first = monitors[0];
+-                            monitors[0] = monitors[j];
+-                            monitors[j] = first;
+-                            break;
+-                        }
+-                    }
+-                    i = count;
+-                    break;
+-                }
+-            }
+-        }
+-        if (active != NULL) {
+-            XRRFreeMonitors(active);
+-        }
+-        if (copied > 0) {
+-            return copied;
+-        }
+-    }
+-
+-    XRRScreenResources *resources = XRRGetScreenResourcesCurrent(display, root);
+-    if (resources != NULL) {
+-        size_t copied = 0;
+-        for (int i = 0; i < resources->ncrtc && copied < capacity; ++i) {
+-            XRRCrtcInfo *crtc =
+-                XRRGetCrtcInfo(display, resources, resources->crtcs[i]);
+-            if (crtc == NULL) {
+-                continue;
+-            }
+-            if (crtc->mode != None && crtc->width > 0 && crtc->height > 0) {
+-                int duplicate = 0;
+-                for (size_t j = 0; j < copied; ++j) {
+-                    if (monitors[j].x == crtc->x &&
+-                        monitors[j].y == crtc->y &&
+-                        monitors[j].width == (int)crtc->width &&
+-                        monitors[j].height == (int)crtc->height) {
+-                        duplicate = 1;
+-                        break;
+-                    }
+-                }
+-                if (!duplicate) {
+-                    monitors[copied++] = (MonitorGeometry){
+-                        crtc->x, crtc->y,
+-                        (int)crtc->width, (int)crtc->height
+-                    };
+-                }
+-            }
+-            XRRFreeCrtcInfo(crtc);
+-        }
+-        RROutput primary = XRRGetOutputPrimary(display, root);
+-        for (int i = 0; primary != None && i < resources->ncrtc; ++i) {
+-            XRRCrtcInfo *crtc =
+-                XRRGetCrtcInfo(display, resources, resources->crtcs[i]);
+-            if (crtc == NULL) {
+-                continue;
+-            }
+-            int has_primary = 0;
+-            for (int output = 0; output < crtc->noutput; ++output) {
+-                if (crtc->outputs[output] == primary) {
+-                    has_primary = 1;
+-                    break;
+-                }
+-            }
+-            if (has_primary) {
+-                for (size_t j = 0; j < copied; ++j) {
+-                    if (monitors[j].x == crtc->x &&
+-                        monitors[j].y == crtc->y &&
+-                        monitors[j].width == (int)crtc->width &&
+-                        monitors[j].height == (int)crtc->height) {
+-                        MonitorGeometry first = monitors[0];
+-                        monitors[0] = monitors[j];
+-                        monitors[j] = first;
+-                        break;
+-                    }
+-                }
+-                XRRFreeCrtcInfo(crtc);
+-                break;
+-            }
+-            XRRFreeCrtcInfo(crtc);
+-        }
+-        XRRFreeScreenResources(resources);
+-        if (copied > 0) {
+-            return copied;
+-        }
+-    }
+-
+-    int screen = DefaultScreen(display);
+-    monitors[0] = (MonitorGeometry){
+-        0, 0, DisplayWidth(display, screen), DisplayHeight(display, screen)
+-    };
+-    return 1;
+-}
+-
+-long monitor_layout_event_mask(Display *display)
+-{
+-    int major = 1;
+-    int minor = 2;
+-    if (!XRRQueryVersion(display, &major, &minor)) {
+-        return 0;
+-    }
+-    long mask = RRScreenChangeNotifyMask;
+-    if (major > 1 || (major == 1 && minor >= 2)) {
+-        mask |= RRCrtcChangeNotifyMask | RROutputChangeNotifyMask;
+-    }
+-    if (major > 1 || (major == 1 && minor >= 4)) {
+-        mask |= RRResourceChangeNotifyMask;
+-    }
+-    return mask;
+-}
+-
+-int monitor_layout_set_primary(Display *display, Window root, size_t index)
+-{
+-    int major = 1;
+-    int minor = 5;
+-    if (!XRRQueryVersion(display, &major, &minor) ||
+-        major < 1 || (major == 1 && minor < 3)) {
+-        fprintf(stderr, "Changing the primary display requires RandR 1.3 or newer.\n");
+-        return 0;
+-    }
+-
+-    MonitorGeometry monitors[32];
+-    size_t count = monitor_layout_get(display, root, monitors,
+-                                      sizeof(monitors) / sizeof(monitors[0]));
+-    if (index >= count) {
+-        return 0;
+-    }
+-
+-    int changed = 0;
+-    if (major > 1 || minor >= 5) {
+-        int active_count = 0;
+-        XRRMonitorInfo *active = XRRGetMonitors(display, root, True,
+-                                                 &active_count);
+-        if (active == NULL) {
+-            fprintf(stderr, "Could not read monitor outputs for primary display selection.\n");
+-            return 0;
+-        }
+-        for (int i = 0; i < active_count && !changed; ++i) {
+-            if (active[i].x != monitors[index].x ||
+-                active[i].y != monitors[index].y ||
+-                active[i].width != monitors[index].width ||
+-                active[i].height != monitors[index].height ||
+-                active[i].noutput == 0) {
+-                continue;
+-            }
+-            XRRSetOutputPrimary(display, root, active[i].outputs[0]);
+-            changed = 1;
+-        }
+-        XRRFreeMonitors(active);
+-    } else {
+-        XRRScreenResources *resources =
+-            XRRGetScreenResourcesCurrent(display, root);
+-        if (resources == NULL) {
+-            fprintf(stderr, "Could not read monitor outputs for primary display selection.\n");
+-            return 0;
+-        }
+-        for (int i = 0; i < resources->ncrtc && !changed; ++i) {
+-            XRRCrtcInfo *crtc =
+-                XRRGetCrtcInfo(display, resources, resources->crtcs[i]);
+-            if (crtc == NULL) {
+-                continue;
+-            }
+-            if (crtc->mode != None && crtc->noutput > 0 &&
+-                crtc->x == monitors[index].x &&
+-                crtc->y == monitors[index].y &&
+-                (int)crtc->width == monitors[index].width &&
+-                (int)crtc->height == monitors[index].height) {
+-                XRRSetOutputPrimary(display, root, crtc->outputs[0]);
+-                changed = 1;
+-            }
+-            XRRFreeCrtcInfo(crtc);
+-        }
+-        XRRFreeScreenResources(resources);
+-    }
+-    if (!changed) {
+-        fprintf(stderr, "Could not identify the selected display's output.\n");
+-    }
+-    return changed;
+-}
+diff --git a/src/monitor_layout.h b/src/monitor_layout.h
+deleted file mode 100644
+index 38a7880..0000000
+--- a/src/monitor_layout.h
++++ /dev/null
+@@ -1,21 +0,0 @@
+-#ifndef FIELD_DESKTOP_MONITOR_LAYOUT_H
+-#define FIELD_DESKTOP_MONITOR_LAYOUT_H
+-
+-#include <X11/Xlib.h>
+-
+-#include <stddef.h>
+-#include <stdio.h>
+-
+-typedef struct {
+-    int x;
+-    int y;
+-    int width;
+-    int height;
+-} MonitorGeometry;
+-
+-size_t monitor_layout_get(Display *display, Window root,
+-                          MonitorGeometry *monitors, size_t capacity);
+-long monitor_layout_event_mask(Display *display);
+-int monitor_layout_set_primary(Display *display, Window root, size_t index);
+-
+-#endif
+diff --git a/src/shell/desktop_view.c b/src/shell/desktop_view.c
+index 249f062..cc1bbe4 100644
+--- a/src/shell/desktop_view.c
++++ b/src/shell/desktop_view.c
+@@ -1,9 +1,8 @@
+ #include "gtk_shell_internal.h"
++#include "icon_badge.h"
+ 
+ #include <gdk/x11/gdkx.h>
+ #include <X11/Xatom.h>
+-#include <X11/extensions/Xrandr.h>
+-
+ #include <stdio.h>
+ #include <string.h>
+ 
+@@ -19,15 +18,17 @@ void desktop_view_center_window(ShellState *state, GtkWidget *window,
+     G_GNUC_BEGIN_IGNORE_DEPRECATIONS
+     Window xid = gdk_x11_surface_get_xid(surface);
+     G_GNUC_END_IGNORE_DEPRECATIONS
+-    MonitorGeometry monitor = state->monitor_count > 0
+-        ? state->monitors[0]
+-        : (MonitorGeometry){0, 0, DisplayWidth(state->xdisplay,
+-                                               DefaultScreen(state->xdisplay)),
+-                            DisplayHeight(state->xdisplay,
+-                                          DefaultScreen(state->xdisplay))};
+-    XMoveWindow(state->xdisplay, xid,
+-                monitor.x + (monitor.width - width) / 2,
+-                monitor.y + (monitor.height - height) / 2);
++    ScreenGeometry screen = screen_layout_get(state->xdisplay);
++    if (width > screen.width) {
++        width = screen.width;
++    }
++    if (height > screen.height) {
++        height = screen.height;
++    }
++    XMoveResizeWindow(state->xdisplay, xid,
++                      screen.x + (screen.width - width) / 2,
++                      screen.y + (screen.height - height) / 2,
++                      (unsigned int)width, (unsigned int)height);
+     XSync(state->xdisplay, False);
+ }
+ 
+@@ -45,12 +46,10 @@ void shell_update_wallpapers(ShellState *state)
+             return;
+         }
+     }
+-    for (size_t i = 0; i < state->monitor_count; ++i) {
+-        if (state->wallpaper_pictures[i] != NULL) {
+-            gtk_picture_set_paintable(GTK_PICTURE(state->wallpaper_pictures[i]),
+-                                      texture != NULL
+-                                          ? GDK_PAINTABLE(texture) : NULL);
+-        }
++    if (state->wallpaper_picture != NULL) {
++        gtk_picture_set_paintable(GTK_PICTURE(state->wallpaper_picture),
++                                  texture != NULL
++                                      ? GDK_PAINTABLE(texture) : NULL);
+     }
+     g_clear_object(&texture);
+ }
+@@ -75,7 +74,8 @@ static gboolean desktop_key_pressed(GtkEventControllerKey *controller,
+         state->icon_theme_dropdown = NULL;
+         gtk_window_destroy(GTK_WINDOW(settings));
+     } else {
+-        g_application_quit(G_APPLICATION(state->application));
++        /* A phone Back gesture must not terminate the desktop session. */
++        return GDK_EVENT_STOP;
+     }
+     return GDK_EVENT_STOP;
+ }
+@@ -85,101 +85,60 @@ static void shortcut_clicked(GtkButton *button, gpointer data)
+     ShellState *state = data;
+     int action = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(button), "action"));
+     if (!shell_launch_action(state, action)) {
+-        shell_show_error(GTK_WINDOW(state->desktop_windows[0]),
++        shell_show_error(GTK_WINDOW(state->desktop_window),
+                          "The requested application could not be started.");
+     }
+ }
+ 
+-static void desktop_item_clicked(GtkButton *button, gpointer data)
+-{
+-    ShellState *state = data;
+-    guint encoded = GPOINTER_TO_UINT(
+-        g_object_get_data(G_OBJECT(button), "item-index"));
+-    const DesktopItem *item = desktop_items_get(&state->desktop_items,
+-                                                (size_t)(encoded - 1));
+-    if (item == NULL ||
+-        !desktop_item_open(item, state->applications,
+-                           state->application_count)) {
+-        shell_show_error(GTK_WINDOW(state->desktop_windows[0]),
+-                         "This desktop item could not be opened.");
+-    }
+-}
+-
+ static GtkWidget *make_shortcut(ShellState *state, int action,
+                                 const char *label, const char *icon)
+ {
+     GtkWidget *button = gtk_button_new();
+     GtkWidget *content = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
+-    GtkWidget *image = gtk_image_new_from_icon_name(icon);
++    GtkWidget *badge = shell_make_icon_badge(label, icon);
+     GtkWidget *text = gtk_label_new(label);
+-    gtk_image_set_pixel_size(GTK_IMAGE(image), 34);
+     gtk_label_set_ellipsize(GTK_LABEL(text), PANGO_ELLIPSIZE_END);
+     gtk_widget_add_css_class(button, "desktop-shortcut");
+     gtk_button_set_child(GTK_BUTTON(button), content);
+-    gtk_box_append(GTK_BOX(content), image);
++    gtk_box_append(GTK_BOX(content), badge);
+     gtk_box_append(GTK_BOX(content), text);
+     g_object_set_data(G_OBJECT(button), "action", GINT_TO_POINTER(action));
+     g_signal_connect(button, "clicked", G_CALLBACK(shortcut_clicked), state);
+     return button;
+ }
+ 
+-static GtkWidget *make_desktop_item(ShellState *state, size_t index)
+-{
+-    const DesktopItem *item = desktop_items_get(&state->desktop_items, index);
+-    if (item == NULL) {
+-        return NULL;
+-    }
+-    GtkWidget *button = gtk_button_new();
+-    GtkWidget *content = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
+-    GtkWidget *image = gtk_image_new_from_icon_name(
+-        item->is_directory ? "folder-symbolic" : "text-x-generic-symbolic");
+-    GtkWidget *text = gtk_label_new(item->name);
+-    gtk_image_set_pixel_size(GTK_IMAGE(image), 30);
+-    gtk_label_set_max_width_chars(GTK_LABEL(text), 18);
+-    gtk_label_set_ellipsize(GTK_LABEL(text), PANGO_ELLIPSIZE_MIDDLE);
+-    gtk_widget_add_css_class(button, "desktop-shortcut");
+-    gtk_button_set_child(GTK_BUTTON(button), content);
+-    gtk_box_append(GTK_BOX(content), image);
+-    gtk_box_append(GTK_BOX(content), text);
+-    g_object_set_data(G_OBJECT(button), "item-index",
+-                      GUINT_TO_POINTER((guint)index + 1));
+-    g_signal_connect(button, "clicked", G_CALLBACK(desktop_item_clicked), state);
+-    return button;
+-}
+-
+ static void add_grid_button(GtkGrid *grid, GtkWidget *button,
+                             int index, int columns)
+ {
+     gtk_grid_attach(grid, button, index % columns, index / columns, 1, 1);
+ }
+ 
+-static GtkWidget *make_panel(ShellState *state, size_t monitor_index)
++static GtkWidget *make_panel(ShellState *state)
+ {
+-    GtkWidget *panel = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
++    GtkWidget *panel = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+     gtk_widget_add_css_class(panel, "panel");
+-    GtkWidget *brand = gtk_label_new("FIELD");
+-    gtk_widget_add_css_class(brand, "brand");
++    gtk_box_set_homogeneous(GTK_BOX(panel), TRUE);
+     GtkWidget *apps = gtk_button_new_with_label("Applications");
++    gtk_widget_add_css_class(apps, "panel-action");
+     gtk_widget_add_css_class(apps, "primary-action");
++    gtk_widget_set_hexpand(apps, TRUE);
+     g_object_set_data(G_OBJECT(apps), "action",
+                       GINT_TO_POINTER(SHELL_ACTION_APPS));
+     g_signal_connect(apps, "clicked", G_CALLBACK(shortcut_clicked), state);
+-    GtkWidget *spacer = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+-    gtk_widget_set_hexpand(spacer, TRUE);
+-    GtkWidget *display = gtk_label_new(NULL);
+-    char display_text[32];
+-    snprintf(display_text, sizeof(display_text), "Display %zu",
+-             monitor_index + 1);
+-    gtk_label_set_text(GTK_LABEL(display), display_text);
+-    gtk_widget_add_css_class(display, "muted");
++    GtkWidget *keyboard = gtk_button_new_with_label("Keyboard");
++    gtk_widget_add_css_class(keyboard, "panel-action");
++    gtk_widget_set_hexpand(keyboard, TRUE);
++    g_object_set_data(G_OBJECT(keyboard), "action",
++                      GINT_TO_POINTER(SHELL_ACTION_KEYBOARD));
++    g_signal_connect(keyboard, "clicked", G_CALLBACK(shortcut_clicked), state);
+     GtkWidget *settings = gtk_button_new_with_label("Settings");
++    gtk_widget_add_css_class(settings, "panel-action");
++    gtk_widget_set_hexpand(settings, TRUE);
+     g_object_set_data(G_OBJECT(settings), "action",
+                       GINT_TO_POINTER(SHELL_ACTION_SETTINGS));
+     g_signal_connect(settings, "clicked", G_CALLBACK(shortcut_clicked), state);
+-    gtk_box_append(GTK_BOX(panel), brand);
+     gtk_box_append(GTK_BOX(panel), apps);
+-    gtk_box_append(GTK_BOX(panel), spacer);
+-    gtk_box_append(GTK_BOX(panel), display);
++    gtk_box_append(GTK_BOX(panel), keyboard);
+     gtk_box_append(GTK_BOX(panel), settings);
+     return panel;
+ }
+@@ -203,7 +162,7 @@ static int set_desktop_window_type(ShellState *state, GtkWidget *window)
+     return 1;
+ }
+ 
+-static GtkWidget *make_desktop_window(ShellState *state, size_t monitor_index)
++static GtkWidget *make_desktop_window(ShellState *state)
+ {
+     static const struct {
+         const char *label;
+@@ -222,8 +181,8 @@ static GtkWidget *make_desktop_window(ShellState *state, size_t monitor_index)
+     gtk_window_set_decorated(GTK_WINDOW(window), FALSE);
+     gtk_window_set_resizable(GTK_WINDOW(window), FALSE);
+     gtk_window_set_default_size(GTK_WINDOW(window),
+-                                state->monitors[monitor_index].width,
+-                                state->monitors[monitor_index].height);
++                                state->screen.width,
++                                state->screen.height);
+ 
+     GtkWidget *overlay = gtk_overlay_new();
+     GtkWidget *surface = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+@@ -236,7 +195,7 @@ static GtkWidget *make_desktop_window(ShellState *state, size_t monitor_index)
+     gtk_overlay_set_child(GTK_OVERLAY(overlay), wallpaper);
+     gtk_overlay_add_overlay(GTK_OVERLAY(overlay), surface);
+     gtk_window_set_child(GTK_WINDOW(window), overlay);
+-    state->wallpaper_pictures[monitor_index] = wallpaper;
++    state->wallpaper_picture = wallpaper;
+ 
+     GtkEventController *keys = gtk_event_controller_key_new();
+     gtk_event_controller_set_propagation_phase(keys, GTK_PHASE_CAPTURE);
+@@ -245,7 +204,7 @@ static GtkWidget *make_desktop_window(ShellState *state, size_t monitor_index)
+     gtk_widget_add_controller(window, keys);
+ 
+     if (state->top_panel) {
+-        gtk_box_append(GTK_BOX(surface), make_panel(state, monitor_index));
++        gtk_box_append(GTK_BOX(surface), make_panel(state));
+     }
+ 
+     GtkWidget *body = gtk_box_new(GTK_ORIENTATION_VERTICAL, 18);
+@@ -264,29 +223,10 @@ static GtkWidget *make_desktop_window(ShellState *state, size_t monitor_index)
+         GtkWidget *button = make_shortcut(state, shortcuts[i].action,
+                                           shortcuts[i].label,
+                                           shortcuts[i].icon);
+-        add_grid_button(GTK_GRID(grid), button, i, 6);
++        add_grid_button(GTK_GRID(grid), button, i, 3);
+     }
+     gtk_box_append(GTK_BOX(body), grid);
+ 
+-    if (state->desktop_files && state->desktop_items.count > 0) {
+-        GtkWidget *items = gtk_grid_new();
+-        gtk_grid_set_row_spacing(GTK_GRID(items), 8);
+-        gtk_grid_set_column_spacing(GTK_GRID(items), 8);
+-        gtk_widget_set_halign(items, GTK_ALIGN_START);
+-        for (size_t i = 0; i < state->desktop_items.count; ++i) {
+-            GtkWidget *button = make_desktop_item(state, i);
+-            if (button != NULL) {
+-                add_grid_button(GTK_GRID(items), button, (int)i, 6);
+-            }
+-        }
+-        GtkWidget *scroll = gtk_scrolled_window_new();
+-        gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroll),
+-                                       GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
+-        gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroll), items);
+-        gtk_widget_set_vexpand(scroll, TRUE);
+-        gtk_box_append(GTK_BOX(body), scroll);
+-    }
+-
+     if (!set_desktop_window_type(state, window)) {
+         gtk_window_destroy(GTK_WINDOW(window));
+         return NULL;
+@@ -297,10 +237,10 @@ static GtkWidget *make_desktop_window(ShellState *state, size_t monitor_index)
+         G_GNUC_BEGIN_IGNORE_DEPRECATIONS
+         Window xid = gdk_x11_surface_get_xid(native_surface);
+         G_GNUC_END_IGNORE_DEPRECATIONS
+-        MonitorGeometry monitor = state->monitors[monitor_index];
+-        XMoveResizeWindow(state->xdisplay, xid, monitor.x, monitor.y,
+-                          (unsigned int)monitor.width,
+-                          (unsigned int)monitor.height);
++        XMoveResizeWindow(state->xdisplay, xid, state->screen.x,
++                          state->screen.y,
++                          (unsigned int)state->screen.width,
++                          (unsigned int)state->screen.height);
+         XLowerWindow(state->xdisplay, xid);
+         XFlush(state->xdisplay);
+     }
+@@ -315,32 +255,22 @@ void shell_refresh_desktop_windows(ShellState *state)
+     if (state->launcher != NULL) {
+         gtk_window_set_transient_for(GTK_WINDOW(state->launcher), NULL);
+     }
+-    for (size_t i = 0; i < SHELL_MAX_MONITORS; ++i) {
+-        state->wallpaper_pictures[i] = NULL;
+-        if (state->desktop_windows[i] != NULL) {
+-            gtk_window_destroy(GTK_WINDOW(state->desktop_windows[i]));
+-            state->desktop_windows[i] = NULL;
+-        }
+-    }
+-    state->monitor_count = monitor_layout_get(
+-        state->xdisplay, DefaultRootWindow(state->xdisplay),
+-        state->monitors, SHELL_MAX_MONITORS);
+-    if (state->monitor_count == 0) {
+-        fprintf(stderr, "No active display monitors were detected.\n");
+-        return;
+-    }
+-    for (size_t i = 0; i < state->monitor_count; ++i) {
+-        state->desktop_windows[i] = make_desktop_window(state, i);
++    state->wallpaper_picture = NULL;
++    if (state->desktop_window != NULL) {
++        gtk_window_destroy(GTK_WINDOW(state->desktop_window));
++        state->desktop_window = NULL;
+     }
+-    if (state->settings != NULL && state->desktop_windows[0] != NULL) {
++    state->screen = screen_layout_get(state->xdisplay);
++    state->desktop_window = make_desktop_window(state);
++    if (state->settings != NULL && state->desktop_window != NULL) {
+         gtk_window_set_transient_for(
+             GTK_WINDOW(state->settings),
+-            GTK_WINDOW(state->desktop_windows[0]));
++            GTK_WINDOW(state->desktop_window));
+     }
+-    if (state->launcher != NULL && state->desktop_windows[0] != NULL) {
++    if (state->launcher != NULL && state->desktop_window != NULL) {
+         gtk_window_set_transient_for(
+             GTK_WINDOW(state->launcher),
+-            GTK_WINDOW(state->desktop_windows[0]));
++            GTK_WINDOW(state->desktop_window));
+     }
+     shell_update_wallpapers(state);
+ }
+diff --git a/src/shell/gtk_shell.c b/src/shell/gtk_shell.c
+index 3372da9..bec729e 100644
+--- a/src/shell/gtk_shell.c
++++ b/src/shell/gtk_shell.c
+@@ -6,12 +6,11 @@
+ #include "launcher.h"
+ #include "settings.h"
+ 
+-#include <glib-unix.h>
+ #include <X11/Xatom.h>
+ #include <X11/Xlib.h>
+-#include <X11/extensions/Xrandr.h>
+ 
+ #include <errno.h>
++#include <glib-unix.h>
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
+@@ -37,23 +36,45 @@ void shell_update_styles(ShellState *state)
+     if (background == NULL) {
+         background = theme->background;
+     }
+-    char css[2048];
++    char css[4096];
+     int length = snprintf(
+         css, sizeof(css),
+         "window { color: %s; background-color: %s; }"
+         ".desktop-surface { background-color: transparent; }"
+         ".panel { background-color: %s; border-bottom: 1px solid "
+-        "alpha(%s, 0.12); padding: 8px 16px; }"
++        "alpha(%s, 0.12); padding: 6px; }"
+         ".brand { font-weight: 700; letter-spacing: 0.04em; }"
+         ".muted { color: alpha(%s, 0.72); }"
+-        "button { border-radius: 9px; padding: 8px 12px; }"
+-        ".desktop-shortcut { background-color: transparent; border: 0;"
+-        " padding: 12px 8px; }"
+-        ".desktop-shortcut:hover { background-color: alpha(%s, 0.12); }"
++        "button, entry, dropdown { min-height: 56px; border-radius: 12px; "
++        "padding: 8px 14px; font-size: 16px; }"
++        "button.panel-action { min-width: 0; min-height: 56px; }"
++        "list > row { min-height: 72px; }"
++        ".launcher-row { background: transparent; border-radius: 14px; "
++        "padding: 4px 0; }"
++        ".launcher-card { min-height: 72px; border-radius: 14px; "
++        "border: 1px solid alpha(%s, 0.28); background-color: %s; "
++        "padding: 8px 12px; }"
++        ".launcher-row:selected .launcher-card { background-color: %s; "
++        "border-color: %s; }"
++        "checkbutton { min-height: 52px; }"
++        ".desktop-shortcut { background-color: alpha(%s, 0.68); "
++        "border: 1px solid alpha(%s, 0.34); padding: 16px 10px; "
++        "min-width: 108px; min-height: 112px; }"
++        ".desktop-shortcut:hover { background-color: alpha(%s, 0.9); "
++        "border-color: %s; }"
++        ".desktop-shortcut label { color: %s; font-weight: 600; }"
++        ".app-icon-badge { border-radius: 14px; background-color: %s; "
++        "border: 1px solid alpha(%s, 0.4); }"
++        ".app-icon-letter { color: %s; font-size: 25px; font-weight: 800; }"
++        ".app-icon-image { background-color: %s; border-radius: 12px; }"
+         ".primary-action { background-color: %s; color: %s; font-weight: 600; }"
+         "entry, list, notebook { border-radius: 10px; }",
+         theme->foreground, background, theme->panel, theme->foreground,
+-        theme->foreground, theme->foreground, theme->accent, theme->background);
++        theme->foreground, theme->foreground, theme->panel,
++        theme->accent, theme->accent, theme->panel, theme->foreground,
++        theme->panel, theme->accent, theme->foreground, theme->panel,
++        theme->foreground, background, theme->panel,
++        theme->accent, theme->background);
+     if (length < 0 || (size_t)length >= sizeof(css)) {
+         fprintf(stderr, "Could not build desktop theme stylesheet.\n");
+         return;
+@@ -89,9 +110,6 @@ static void load_settings(ShellState *state)
+         if (sscanf(line, "top_panel=%d", &enabled) == 1 &&
+             (enabled == 0 || enabled == 1)) {
+             state->top_panel = enabled;
+-        } else if (sscanf(line, "desktop_files=%d", &enabled) == 1 &&
+-                   (enabled == 0 || enabled == 1)) {
+-            state->desktop_files = enabled;
+         } else if (sscanf(line, "taskbar=%d", &enabled) == 1 &&
+                    (enabled == 0 || enabled == 1)) {
+             state->taskbar = enabled;
+@@ -147,10 +165,10 @@ int shell_save_settings(ShellState *state)
+         return 0;
+     }
+     int failed = fprintf(file,
+-                         "top_panel=%d\ndesktop_files=%d\ntaskbar=%d\n"
++                         "top_panel=%d\ntaskbar=%d\n"
+                          "icon_theme=%s\n",
+-                         state->top_panel, state->desktop_files,
+-                         state->taskbar, state->icon_theme_id) < 0;
++                         state->top_panel, state->taskbar,
++                         state->icon_theme_id) < 0;
+     if (fclose(file) != 0) {
+         failed = 1;
+     }
+@@ -183,6 +201,8 @@ int shell_launch_action(ShellState *state, int action)
+         return applications_launch_kind(state->applications,
+                                         state->application_count,
+                                         APPLICATION_BROWSER);
++    case SHELL_ACTION_KEYBOARD:
++        return shell_keyboard_command("manual", "toggle");
+     case SHELL_ACTION_SETTINGS:
+         settings_open(state);
+         return 1;
+@@ -191,21 +211,20 @@ int shell_launch_action(ShellState *state, int action)
+     }
+ }
+ 
+-static gboolean desktop_items_changed(gint fd, GIOCondition condition,
+-                                      gpointer data)
++int shell_keyboard_command(const char *lease, const char *action)
+ {
+-    ShellState *state = data;
+-    if ((condition & (G_IO_ERR | G_IO_HUP | G_IO_NVAL)) != 0) {
+-        fprintf(stderr, "Desktop folder watcher stopped unexpectedly.\n");
+-        state->items_source = 0;
+-        return G_SOURCE_REMOVE;
+-    }
+-    if ((condition & G_IO_IN) != 0 &&
+-        desktop_items_handle_changes(&state->desktop_items)) {
+-        shell_refresh_desktop_windows(state);
++    GError *error = NULL;
++    char *arguments[] = {
++        "/usr/bin/fieldm-keyboard", (char *)lease, (char *)action, NULL
++    };
++    if (!g_spawn_async(NULL, arguments, NULL,
++                       G_SPAWN_DEFAULT, NULL, NULL, NULL, &error)) {
++        fprintf(stderr, "Could not run fieldm-keyboard %s %s: %s\n",
++                lease, action, error->message);
++        g_clear_error(&error);
++        return 0;
+     }
+-    (void)fd;
+-    return G_SOURCE_CONTINUE;
++    return 1;
+ }
+ 
+ static void process_x_events(ShellState *state)
+@@ -236,24 +255,6 @@ static gboolean x_events_ready(gint fd, GIOCondition condition, gpointer data)
+     return G_SOURCE_CONTINUE;
+ }
+ 
+-static gboolean refresh_monitors(gpointer data)
+-{
+-    ShellState *state = data;
+-    MonitorGeometry current[SHELL_MAX_MONITORS];
+-    size_t count = monitor_layout_get(state->xdisplay,
+-                                      DefaultRootWindow(state->xdisplay),
+-                                      current, SHELL_MAX_MONITORS);
+-    int changed = count != state->monitor_count;
+-    for (size_t i = 0; !changed && i < count; ++i) {
+-        changed = memcmp(&current[i], &state->monitors[i],
+-                         sizeof(current[i])) != 0;
+-    }
+-    if (changed) {
+-        shell_refresh_desktop_windows(state);
+-    }
+-    return G_SOURCE_CONTINUE;
+-}
+-
+ static void window_manager_exited(GPid pid, gint status, gpointer data)
+ {
+     ShellState *state = data;
+@@ -297,14 +298,6 @@ static void create_command_window(ShellState *state)
+     }
+     XSelectInput(state->xdisplay, root, PropertyChangeMask |
+                  StructureNotifyMask);
+-    int event_base;
+-    int error_base;
+-    if (XRRQueryExtension(state->xdisplay, &event_base, &error_base)) {
+-        long event_mask = monitor_layout_event_mask(state->xdisplay);
+-        if (event_mask != 0) {
+-            XRRSelectInput(state->xdisplay, root, event_mask);
+-        }
+-    }
+     shell_publish_features(state);
+ }
+ 
+@@ -323,13 +316,6 @@ static void application_activate(GtkApplication *application, gpointer data)
+     state->x_source = g_unix_fd_add(
+         ConnectionNumber(state->xdisplay),
+         G_IO_IN | G_IO_ERR | G_IO_HUP | G_IO_NVAL, x_events_ready, state);
+-    if (state->desktop_items.watch_fd >= 0) {
+-        state->items_source = g_unix_fd_add(
+-            state->desktop_items.watch_fd,
+-            G_IO_IN | G_IO_ERR | G_IO_HUP | G_IO_NVAL,
+-            desktop_items_changed, state);
+-    }
+-    state->monitor_source = g_timeout_add_seconds(2, refresh_monitors, state);
+     if (state->window_manager > 0) {
+         state->wm_source = g_child_watch_add(
+             state->window_manager, window_manager_exited, state);
+@@ -345,7 +331,6 @@ int gtk_shell_run(int argc, char **argv, pid_t window_manager)
+         return 1;
+     }
+     state->top_panel = 1;
+-    state->desktop_files = 1;
+     state->taskbar = 1;
+     state->window_manager = window_manager;
+     state->xdisplay = XOpenDisplay(NULL);
+@@ -358,12 +343,6 @@ int gtk_shell_run(int argc, char **argv, pid_t window_manager)
+     appearance_init(&state->appearance);
+     state->application_count = applications_load(
+         state->applications, SHELL_MAX_APPLICATIONS);
+-    if (!desktop_items_init(&state->desktop_items, SHELL_MAX_DESKTOP_ITEMS)) {
+-        memset(&state->desktop_items, 0, sizeof(state->desktop_items));
+-        state->desktop_items.watch_fd = -1;
+-        state->desktop_items.watch_id = -1;
+-    }
+-
+     GtkApplication *application = gtk_application_new(
+         "org.zirtualz.field-desktop", G_APPLICATION_NON_UNIQUE);
+     g_signal_connect(application, "activate",
+@@ -374,12 +353,6 @@ int gtk_shell_run(int argc, char **argv, pid_t window_manager)
+     if (state->x_source != 0) {
+         g_source_remove(state->x_source);
+     }
+-    if (state->items_source != 0) {
+-        g_source_remove(state->items_source);
+-    }
+-    if (state->monitor_source != 0) {
+-        g_source_remove(state->monitor_source);
+-    }
+     if (state->wm_source != 0) {
+         g_source_remove(state->wm_source);
+     }
+@@ -387,10 +360,8 @@ int gtk_shell_run(int argc, char **argv, pid_t window_manager)
+     if (state->settings != NULL) {
+         gtk_window_destroy(GTK_WINDOW(state->settings));
+     }
+-    for (size_t i = 0; i < SHELL_MAX_MONITORS; ++i) {
+-        if (state->desktop_windows[i] != NULL) {
+-            gtk_window_destroy(GTK_WINDOW(state->desktop_windows[i]));
+-        }
++    if (state->desktop_window != NULL) {
++        gtk_window_destroy(GTK_WINDOW(state->desktop_window));
+     }
+     if (state->command_window != None) {
+         if (XGetSelectionOwner(state->xdisplay, state->owner_atom) ==
+@@ -400,9 +371,6 @@ int gtk_shell_run(int argc, char **argv, pid_t window_manager)
+         }
+         XDestroyWindow(state->xdisplay, state->command_window);
+     }
+-    if (state->desktop_items.items != NULL) {
+-        desktop_items_destroy(&state->desktop_items);
+-    }
+     g_clear_object(&state->styles);
+     icon_themes_destroy(state);
+     g_clear_object(&application);
+diff --git a/src/shell/gtk_shell_internal.h b/src/shell/gtk_shell_internal.h
+index 025496c..11d8ae1 100644
+--- a/src/shell/gtk_shell_internal.h
++++ b/src/shell/gtk_shell_internal.h
+@@ -3,8 +3,7 @@
+ 
+ #include "../applications.h"
+ #include "../appearance.h"
+-#include "../desktop_items.h"
+-#include "../monitor_layout.h"
++#include "../screen_layout.h"
+ 
+ #if defined(__GNUC__)
+ #pragma GCC diagnostic push
+@@ -19,13 +18,12 @@
+ 
+ enum {
+     SHELL_MAX_APPLICATIONS = 512,
+-    SHELL_MAX_MONITORS = 16,
+-    SHELL_MAX_DESKTOP_ITEMS = 256,
+     SHELL_ICON_THEME_ID_SIZE = 256,
+     SHELL_ACTION_APPS,
+     SHELL_ACTION_TERMINAL,
+     SHELL_ACTION_FILES,
+     SHELL_ACTION_BROWSER,
++    SHELL_ACTION_KEYBOARD,
+     SHELL_ACTION_SETTINGS
+ };
+ 
+@@ -44,14 +42,12 @@ typedef struct {
+     Atom desktop_type_atom;
+     Application applications[SHELL_MAX_APPLICATIONS];
+     size_t application_count;
+-    DesktopItems desktop_items;
+     Appearance appearance;
+     GPtrArray *icon_themes;
+     char icon_theme_id[SHELL_ICON_THEME_ID_SIZE];
+-    MonitorGeometry monitors[SHELL_MAX_MONITORS];
+-    size_t monitor_count;
+-    GtkWidget *desktop_windows[SHELL_MAX_MONITORS];
+-    GtkWidget *wallpaper_pictures[SHELL_MAX_MONITORS];
++    ScreenGeometry screen;
++    GtkWidget *desktop_window;
++    GtkWidget *wallpaper_picture;
+     GtkWidget *launcher;
+     GtkWidget *settings;
+     GtkWidget *launcher_entry;
+@@ -61,13 +57,10 @@ typedef struct {
+     GtkCssProvider *styles;
+     int command_selection_failed;
+     int top_panel;
+-    int desktop_files;
+     int taskbar;
+     pid_t window_manager;
+     int window_manager_failed;
+     guint x_source;
+-    guint items_source;
+-    guint monitor_source;
+     guint wm_source;
+ } ShellState;
+ 
+@@ -78,6 +71,7 @@ void shell_publish_features(ShellState *state);
+ int shell_save_settings(ShellState *state);
+ void shell_refresh_desktop_windows(ShellState *state);
+ int shell_launch_action(ShellState *state, int action);
++int shell_keyboard_command(const char *lease, const char *action);
+ void desktop_view_center_window(ShellState *state, GtkWidget *window,
+                                 int width, int height);
+ void launcher_open(ShellState *state);
+diff --git a/src/shell/icon_themes.c b/src/shell/icon_themes.c
+index 1d1d24e..3318c05 100644
+--- a/src/shell/icon_themes.c
++++ b/src/shell/icon_themes.c
+@@ -105,10 +105,11 @@ static gint compare_theme_names(gconstpointer left, gconstpointer right)
+     return g_utf8_collate(first->name, second->name);
+ }
+ 
+-static void apply_theme_name(GtkIconTheme *theme, const char *theme_id)
++static void apply_theme_name(GdkDisplay *display, const char *theme_id)
+ {
+-    gtk_icon_theme_set_theme_name(
+-        theme, strcmp(theme_id, "__system__") == 0 ? NULL : theme_id);
++    GtkSettings *settings = gtk_settings_get_for_display(display);
++    g_object_set(settings, "gtk-icon-theme-name",
++                 strcmp(theme_id, "__system__") == 0 ? NULL : theme_id, NULL);
+ }
+ 
+ void icon_themes_initialize(ShellState *state)
+@@ -165,7 +166,7 @@ void icon_themes_initialize(ShellState *state)
+         !icon_themes_select(state, state->icon_theme_id)) {
+         snprintf(state->icon_theme_id, sizeof(state->icon_theme_id), "%s",
+                  current_name);
+-        apply_theme_name(theme, current_name);
++        apply_theme_name(display, current_name);
+     }
+ 
+     g_free(current_name);
+@@ -200,8 +201,7 @@ int icon_themes_select(ShellState *state, const char *theme_id)
+         if (strcmp(theme->id, theme_id) == 0) {
+             snprintf(state->icon_theme_id, sizeof(state->icon_theme_id), "%s",
+                      theme->id);
+-            apply_theme_name(gtk_icon_theme_get_for_display(
+-                                 gdk_display_get_default()), theme->id);
++            apply_theme_name(gdk_display_get_default(), theme->id);
+             return 1;
+         }
+     }
+diff --git a/src/shell/launcher.c b/src/shell/launcher.c
+index 8478e85..a424d7c 100644
+--- a/src/shell/launcher.c
++++ b/src/shell/launcher.c
+@@ -1,4 +1,5 @@
+ #include "gtk_shell_internal.h"
++#include "icon_badge.h"
+ 
+ #include <X11/keysym.h>
+ 
+@@ -27,6 +28,14 @@ static void row_activated(GtkListBox *list, GtkListBoxRow *row, gpointer data)
+     launch_row(data, row);
+ }
+ 
++static void search_focus_entered(GtkEventControllerFocus *controller,
++                                 gpointer data)
++{
++    (void)controller;
++    shell_keyboard_command("entry", "on");
++    (void)data;
++}
++
+ static void entry_activated(GtkEntry *entry, gpointer data)
+ {
+     ShellState *state = data;
+@@ -55,14 +64,12 @@ static void search_changed(GtkEditable *editable, gpointer data)
+             continue;
+         }
+         GtkWidget *row = gtk_list_box_row_new();
++        gtk_widget_add_css_class(row, "launcher-row");
+         GtkWidget *content = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
++        gtk_widget_add_css_class(content, "launcher-card");
+         const char *icon = state->applications[i].icon;
+-        GtkWidget *image = icon[0] != '\0' && icon[0] == '/' &&
+-                           access(icon, R_OK) == 0
+-            ? gtk_image_new_from_file(icon)
+-            : gtk_image_new_from_icon_name(
+-                  icon[0] != '\0' ? icon : "application-x-executable-symbolic");
+-        gtk_image_set_pixel_size(GTK_IMAGE(image), 24);
++        GtkWidget *badge = shell_make_icon_badge(
++            state->applications[i].name, icon);
+         GtkWidget *label = gtk_label_new(state->applications[i].name);
+         gtk_label_set_xalign(GTK_LABEL(label), 0.0f);
+         gtk_widget_set_hexpand(label, TRUE);
+@@ -70,7 +77,7 @@ static void search_changed(GtkEditable *editable, gpointer data)
+         gtk_widget_set_margin_end(label, 12);
+         gtk_widget_set_margin_top(label, 10);
+         gtk_widget_set_margin_bottom(label, 10);
+-        gtk_box_append(GTK_BOX(content), image);
++        gtk_box_append(GTK_BOX(content), badge);
+         gtk_box_append(GTK_BOX(content), label);
+         gtk_list_box_row_set_child(GTK_LIST_BOX_ROW(row), content);
+         g_object_set_data(G_OBJECT(row), "application-index",
+@@ -131,6 +138,7 @@ static gboolean window_closed(GtkWindow *window, gpointer data)
+         state->launcher = NULL;
+         state->launcher_entry = NULL;
+         state->launcher_results = NULL;
++        shell_keyboard_command("entry", "off");
+     }
+     return GDK_EVENT_PROPAGATE;
+ }
+@@ -144,6 +152,7 @@ void launcher_close(ShellState *state)
+     state->launcher = NULL;
+     state->launcher_entry = NULL;
+     state->launcher_results = NULL;
++    shell_keyboard_command("entry", "off");
+     gtk_window_destroy(GTK_WINDOW(window));
+ }
+ 
+@@ -152,12 +161,13 @@ void launcher_open(ShellState *state)
+     if (state->launcher != NULL) {
+         gtk_window_present(GTK_WINDOW(state->launcher));
+         gtk_widget_grab_focus(state->launcher_entry);
++        shell_keyboard_command("entry", "on");
+         return;
+     }
+     GtkWidget *window = gtk_application_window_new(state->application);
+     state->launcher = window;
+     gtk_window_set_title(GTK_WINDOW(window), "Applications");
+-    gtk_window_set_default_size(GTK_WINDOW(window), 560, 520);
++    gtk_window_set_default_size(GTK_WINDOW(window), 688, 1080);
+     GtkWidget *content = gtk_box_new(GTK_ORIENTATION_VERTICAL, 12);
+     gtk_widget_set_margin_start(content, 22);
+     gtk_widget_set_margin_end(content, 22);
+@@ -169,13 +179,17 @@ void launcher_open(ShellState *state)
+     state->launcher_entry = gtk_search_entry_new();
+     gtk_search_entry_set_placeholder_text(GTK_SEARCH_ENTRY(state->launcher_entry),
+                                           "Search installed applications");
++    GtkEventController *entry_focus = gtk_event_controller_focus_new();
++    g_signal_connect(entry_focus, "enter",
++                     G_CALLBACK(search_focus_entered), state);
++    gtk_widget_add_controller(state->launcher_entry, entry_focus);
+     GtkWidget *scroll = gtk_scrolled_window_new();
+     gtk_widget_set_vexpand(scroll, TRUE);
+     state->launcher_results = gtk_list_box_new();
+     gtk_list_box_set_selection_mode(GTK_LIST_BOX(state->launcher_results),
+                                     GTK_SELECTION_SINGLE);
+     gtk_list_box_set_activate_on_single_click(
+-        GTK_LIST_BOX(state->launcher_results), FALSE);
++        GTK_LIST_BOX(state->launcher_results), TRUE);
+     gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroll),
+                                   state->launcher_results);
+     gtk_box_append(GTK_BOX(content), heading);
+@@ -195,8 +209,9 @@ void launcher_open(ShellState *state)
+     gtk_event_controller_set_propagation_phase(keys, GTK_PHASE_CAPTURE);
+     g_signal_connect(keys, "key-pressed", G_CALLBACK(key_pressed), state);
+     gtk_widget_add_controller(window, keys);
+-    desktop_view_center_window(state, window, 560, 520);
++    desktop_view_center_window(state, window, 688, 1080);
+     gtk_window_present(GTK_WINDOW(window));
+     gtk_widget_grab_focus(state->launcher_entry);
++    shell_keyboard_command("entry", "on");
+     search_changed(GTK_EDITABLE(state->launcher_entry), state);
+ }
+diff --git a/src/shell/settings.c b/src/shell/settings.c
+index 8207b4d..a1103bd 100644
+--- a/src/shell/settings.c
++++ b/src/shell/settings.c
+@@ -41,9 +41,6 @@ static void option_toggled(GtkCheckButton *button, gpointer data)
+     if (strcmp(option, "panel") == 0) {
+         state->top_panel = enabled;
+         shell_refresh_desktop_windows(state);
+-    } else if (strcmp(option, "files") == 0) {
+-        state->desktop_files = enabled;
+-        shell_refresh_desktop_windows(state);
+     } else if (strcmp(option, "taskbar") == 0) {
+         state->taskbar = enabled;
+     }
+@@ -330,7 +327,6 @@ static GtkWidget *make_desktop_page(ShellState *state)
+         int active;
+     } options[] = {
+         {"Show the top panel", "panel", state->top_panel},
+-        {"Show Desktop folder items", "files", state->desktop_files},
+         {"Show the window-manager taskbar", "taskbar", state->taskbar}
+     };
+     for (size_t i = 0; i < sizeof(options) / sizeof(options[0]); ++i) {
+@@ -354,7 +350,7 @@ void settings_open(ShellState *state)
+     GtkWidget *window = gtk_application_window_new(state->application);
+     state->settings = window;
+     gtk_window_set_title(GTK_WINDOW(window), "Field Desktop Settings");
+-    gtk_window_set_default_size(GTK_WINDOW(window), 640, 600);
++    gtk_window_set_default_size(GTK_WINDOW(window), 688, 1080);
+     GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 12);
+     gtk_widget_set_margin_start(box, 18);
+     gtk_widget_set_margin_end(box, 18);
+@@ -379,6 +375,6 @@ void settings_open(ShellState *state)
+     gtk_widget_add_controller(window, keys);
+     g_signal_connect(window, "close-request",
+                      G_CALLBACK(window_closed), state);
+-    desktop_view_center_window(state, window, 640, 600);
++    desktop_view_center_window(state, window, 688, 1080);
+     gtk_window_present(GTK_WINDOW(window));
+ }
+diff --git a/src/wm.c b/src/wm.c
+index 857aa1d..9b74be2 100644
+--- a/src/wm.c
++++ b/src/wm.c
+@@ -1,15 +1,16 @@
+ #define _POSIX_C_SOURCE 200809L
+ 
+-#include "monitor_layout.h"
++#include "screen_layout.h"
+ 
+ #include <X11/Xatom.h>
+ #include <X11/Xft/Xft.h>
+ #include <X11/Xlib.h>
+ #include <X11/cursorfont.h>
+ #include <X11/keysym.h>
+-#include <X11/extensions/Xrandr.h>
+ 
++#include <ctype.h>
+ #include <errno.h>
++#include <fcntl.h>
+ #include <signal.h>
+ #include <stdio.h>
+ #include <stdlib.h>
+@@ -18,17 +19,17 @@
+ 
+ enum {
+     MAX_CLIENTS = 128,
+-    TITLE_HEIGHT = 38,
++    TITLE_HEIGHT = 64,
+     MIN_WIDTH = 240,
+     MIN_HEIGHT = 140,
+-    RESIZE_BORDER = 8,
++    RESIZE_BORDER = 12,
+     SWITCHER_ROWS = 10,
+-    SWITCHER_WIDTH = 480,
+-    SWITCHER_ROW_HEIGHT = 42,
+-    TASKBAR_HEIGHT = 48,
+-    TASKBAR_BUTTON_MIN_WIDTH = 112,
+-    TASKBAR_BUTTON_MAX_WIDTH = 280,
+-    MAX_MONITORS = 16
++    SWITCHER_WIDTH = 680,
++    SWITCHER_ROW_HEIGHT = 64,
++    TASKBAR_HEIGHT = 88,
++    TASKBAR_BUTTON_MIN_WIDTH = 180,
++    TASKBAR_BUTTON_MAX_WIDTH = 320,
++    KEYBOARD_HEIGHT = 300
+ };
+ 
+ typedef struct {
+@@ -38,6 +39,8 @@ typedef struct {
+     int y;
+     int width;
+     int height;
++    int fullscreen;
++    int terminal;
+ } ManagedWindow;
+ 
+ static Display *display;
+@@ -45,7 +48,6 @@ static Window root;
+ static ManagedWindow clients[MAX_CLIENTS];
+ static int client_count;
+ static int focused = -1;
+-static int next_position;
+ static unsigned long frame_color;
+ static unsigned long active_color;
+ static unsigned long switcher_color;
+@@ -63,16 +65,166 @@ static XftColor accent_xft;
+ static XftColor dark_xft;
+ static int startup_failed;
+ static Window switcher_window;
+-static Window taskbar_windows[MAX_MONITORS];
+-static MonitorGeometry monitor_layout[MAX_MONITORS];
+-static size_t monitor_count = 1;
++static Window taskbar_window;
++static Window keyboard_window;
++static ScreenGeometry screen_layout;
+ static int taskbar_enabled = 1;
+-static int randr_event_base;
+-static int randr_error_base;
++static int terminal_count;
+ 
+ static void show_switcher(void);
+ static void draw_taskbar(void);
+ static void sync_taskbars(void);
++static void arrange_client(int index);
++static void maximize_client(int index, int fullscreen);
++
++static void terminal_keyboard_command(const char *action)
++{
++    pid_t child = fork();
++    if (child == 0) {
++        int null = open("/dev/null", O_WRONLY);
++        if (null >= 0) {
++            dup2(null, STDOUT_FILENO);
++            dup2(null, STDERR_FILENO);
++            if (null > STDERR_FILENO) {
++                close(null);
++            }
++        }
++        execl("/usr/bin/fieldm-keyboard", "fieldm-keyboard",
++              "terminal", action, (char *)NULL);
++        _exit(127);
++    }
++    if (child < 0) {
++        perror("Could not run fieldm-keyboard");
++    }
++}
++
++static int text_matches_terminal(const char *text)
++{
++    static const char *const names[] = {
++        "terminal", "xterm", "uxterm", "foot", "kitty", "alacritty",
++        "st", "urxvt", "wezterm", "konsole", "applications"
++    };
++    if (text == NULL) {
++        return 0;
++    }
++    for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); ++i) {
++        const char *needle = names[i];
++        for (const char *cursor = text; *cursor != '\0'; ++cursor) {
++            const char *left = cursor;
++            const char *right = needle;
++            while (*left != '\0' && *right != '\0' &&
++                   tolower((unsigned char)*left) ==
++                       tolower((unsigned char)*right)) {
++                ++left;
++                ++right;
++            }
++            if (*right == '\0') {
++                return 1;
++            }
++        }
++    }
++    return 0;
++}
++
++static int client_is_terminal(Window window)
++{
++    XClassHint hint = {0};
++    int terminal = 0;
++    if (XGetClassHint(display, window, &hint)) {
++        terminal = text_matches_terminal(hint.res_name) ||
++                   text_matches_terminal(hint.res_class);
++        XFree(hint.res_name);
++        XFree(hint.res_class);
++    }
++    char *name = NULL;
++    if (!terminal && XFetchName(display, window, &name) && name != NULL) {
++        terminal = text_matches_terminal(name);
++    }
++    if (name != NULL) {
++        XFree(name);
++    }
++    return terminal;
++}
++
++static int text_matches_keyboard(const char *text)
++{
++    static const char needle[] = "svkbd";
++    if (text == NULL) {
++        return 0;
++    }
++    for (const char *cursor = text; *cursor != '\0'; ++cursor) {
++        const char *left = cursor;
++        const char *right = needle;
++        while (*left != '\0' && *right != '\0' &&
++               tolower((unsigned char)*left) ==
++                   tolower((unsigned char)*right)) {
++            ++left;
++            ++right;
++        }
++        if (*right == '\0') {
++            return 1;
++        }
++    }
++    return 0;
++}
++
++static int client_is_keyboard(Window window)
++{
++    XClassHint hint = {0};
++    int keyboard = 0;
++    if (XGetClassHint(display, window, &hint)) {
++        keyboard = text_matches_keyboard(hint.res_name) ||
++                   text_matches_keyboard(hint.res_class);
++        XFree(hint.res_name);
++        XFree(hint.res_class);
++    }
++    char *name = NULL;
++    if (!keyboard && XFetchName(display, window, &name) && name != NULL) {
++        keyboard = text_matches_keyboard(name);
++    }
++    if (name != NULL) {
++        XFree(name);
++    }
++    return keyboard;
++}
++
++static void place_keyboard_window(Window window)
++{
++    int y = screen_layout.y + screen_layout.height -
++            KEYBOARD_HEIGHT - TASKBAR_HEIGHT;
++    keyboard_window = window;
++    XMoveResizeWindow(display, window, screen_layout.x, y,
++                      (unsigned int)screen_layout.width, KEYBOARD_HEIGHT);
++    XSetWindowBorderWidth(display, window, 0);
++    XSelectInput(display, window, StructureNotifyMask | PropertyChangeMask);
++    XMapRaised(display, window);
++    if (taskbar_enabled && taskbar_window != None) {
++        XMapRaised(display, taskbar_window);
++    }
++    XFlush(display);
++}
++
++static void sync_terminal_state(int index)
++{
++    if (index < 0 || index >= client_count) {
++        return;
++    }
++    int terminal = client_is_terminal(clients[index].client);
++    if (terminal == clients[index].terminal) {
++        return;
++    }
++    clients[index].terminal = terminal;
++    if (terminal) {
++        if (terminal_count++ == 0) {
++            terminal_keyboard_command("on");
++        }
++    } else if (--terminal_count == 0) {
++        terminal_keyboard_command("off");
++    }
++    if (focused == index) {
++        maximize_client(index, clients[index].fullscreen);
++    }
++}
+ 
+ static unsigned long named_color(const char *name)
+ {
+@@ -197,6 +349,9 @@ static void taskbar_layout(int width, int *button_width, int *shown,
+     if (*shown > client_count) {
+         *shown = client_count;
+     }
++    if (*shown < client_count) {
++        --(*shown);
++    }
+     *offset = 12;
+ }
+ 
+@@ -259,19 +414,19 @@ static void draw_frame(int index)
+     }
+     if (name != NULL) {
+         XSetForeground(display, gc, accent_xft.pixel);
+-        XFillArc(display, managed->frame, gc, 13, 13, 12, 12, 0, 360 * 64);
+-        draw_text(managed->frame, name, 35, 25, &text_xft,
+-                  managed->width - 90);
++        XFillArc(display, managed->frame, gc, 18, 20, 24, 24, 0, 360 * 64);
++        draw_text(managed->frame, name, 54, 41, &text_xft,
++                  managed->width - 130);
+         XFree(name);
+     }
+ 
+-    draw_round_rect(managed->frame, managed->width - 34, 7, 24, 24, 12,
++    draw_round_rect(managed->frame, managed->width - 58, 6, 52, 52, 18,
+                     index == focused ? close_color : button_color);
+     XSetForeground(display, gc, text_xft.pixel);
+-    XDrawLine(display, managed->frame, gc, managed->width - 27, 14,
+-              managed->width - 17, 24);
+-    XDrawLine(display, managed->frame, gc, managed->width - 17, 14,
+-              managed->width - 27, 24);
++    XDrawLine(display, managed->frame, gc, managed->width - 43, 20,
++              managed->width - 25, 42);
++    XDrawLine(display, managed->frame, gc, managed->width - 25, 20,
++              managed->width - 43, 42);
+     XSetForeground(display, gc, outline_color);
+     XDrawLine(display, managed->frame, gc, 0, TITLE_HEIGHT - 1,
+               managed->width + RESIZE_BORDER, TITLE_HEIGHT - 1);
+@@ -298,18 +453,60 @@ static void focus_client(int index)
+     if (index < 0 || index >= client_count) {
+         return;
+     }
+-    if (focused >= 0 && focused < client_count) {
+-        draw_frame(focused);
++    int previous = focused;
++    if (previous >= 0 && previous < client_count) {
++        draw_frame(previous);
+     }
+     focused = index;
++    if (previous != index && previous >= 0 &&
++        previous < client_count && clients[previous].terminal) {
++        maximize_client(previous, clients[previous].fullscreen);
++    }
++    if (clients[index].terminal && !clients[index].fullscreen) {
++        maximize_client(index, 0);
++    }
+     XRaiseWindow(display, clients[index].frame);
+     XSetInputFocus(display, clients[index].client, RevertToPointerRoot,
+                    CurrentTime);
+     draw_frame(index);
+     draw_taskbar();
+-    for (size_t i = 0; i < monitor_count; ++i) {
+-        if (taskbar_enabled && taskbar_windows[i] != None) {
+-            XRaiseWindow(display, taskbar_windows[i]);
++    if (taskbar_enabled && !clients[index].fullscreen &&
++        taskbar_window != None) {
++        XMapRaised(display, taskbar_window);
++    } else if (clients[index].fullscreen && taskbar_window != None) {
++        XUnmapWindow(display, taskbar_window);
++    }
++}
++
++static void maximize_client(int index, int fullscreen)
++{
++    if (index < 0 || index >= client_count) {
++        return;
++    }
++    ManagedWindow *managed = &clients[index];
++    managed->fullscreen = fullscreen;
++    Atom states[3] = {
++        XInternAtom(display, "_NET_WM_STATE_MAXIMIZED_HORZ", False),
++        XInternAtom(display, "_NET_WM_STATE_MAXIMIZED_VERT", False),
++        XInternAtom(display, "_NET_WM_STATE_FULLSCREEN", False)
++    };
++    XChangeProperty(display, managed->client,
++                    XInternAtom(display, "_NET_WM_STATE", False),
++                    XA_ATOM, 32, PropModeReplace,
++                    (unsigned char *)states, fullscreen ? 3 : 2);
++    managed->x = screen_layout.x;
++    managed->y = screen_layout.y;
++    managed->width = screen_layout.width - RESIZE_BORDER;
++    managed->height = screen_layout.height - TITLE_HEIGHT - RESIZE_BORDER -
++        (taskbar_enabled && !fullscreen ? TASKBAR_HEIGHT : 0) -
++        (managed->terminal && focused == index && !fullscreen &&
++         terminal_count > 0 ? KEYBOARD_HEIGHT : 0);
++    arrange_client(index);
++    if (taskbar_window != None) {
++        if (taskbar_enabled && !fullscreen) {
++            XMapRaised(display, taskbar_window);
++        } else {
++            XUnmapWindow(display, taskbar_window);
+         }
+     }
+ }
+@@ -338,6 +535,10 @@ static void manage_window(Window client)
+         XLowerWindow(display, client);
+         return;
+     }
++    if (client_is_keyboard(client)) {
++        place_keyboard_window(client);
++        return;
++    }
+     if (client_count >= MAX_CLIENTS) {
+         return;
+     }
+@@ -352,49 +553,17 @@ static void manage_window(Window client)
+     int index = client_count++;
+     ManagedWindow *managed = &clients[index];
+     managed->client = client;
+-    managed->width = attributes.width < MIN_WIDTH ? MIN_WIDTH : attributes.width;
+-    managed->height = attributes.height < MIN_HEIGHT ? MIN_HEIGHT : attributes.height;
+-    MonitorGeometry monitor = monitor_layout[(size_t)next_position %
+-                                             monitor_count];
+-    if (attributes.x != 0 || attributes.y != 0) {
+-        int center_x = attributes.x + attributes.width / 2;
+-        int center_y = attributes.y + attributes.height / 2;
+-        for (size_t i = 0; i < monitor_count; ++i) {
+-            if (center_x >= monitor_layout[i].x &&
+-                center_x < monitor_layout[i].x + monitor_layout[i].width &&
+-                center_y >= monitor_layout[i].y &&
+-                center_y < monitor_layout[i].y + monitor_layout[i].height) {
+-                monitor = monitor_layout[i];
+-                break;
+-            }
+-        }
+-    }
+-    int available_height = monitor.height -
++    managed->terminal = 0;
++    managed->x = screen_layout.x;
++    managed->y = screen_layout.y;
++    managed->width = screen_layout.width - RESIZE_BORDER;
++    managed->height = screen_layout.height - TITLE_HEIGHT - RESIZE_BORDER -
+         (taskbar_enabled ? TASKBAR_HEIGHT : 0);
+-    if (monitor.width - RESIZE_BORDER >= MIN_WIDTH &&
+-        managed->width > monitor.width - RESIZE_BORDER) {
+-        managed->width = monitor.width - RESIZE_BORDER;
+-    }
+-    if (available_height - TITLE_HEIGHT - RESIZE_BORDER >= MIN_HEIGHT &&
+-        managed->height >
+-            available_height - TITLE_HEIGHT - RESIZE_BORDER) {
+-        managed->height = available_height - TITLE_HEIGHT - RESIZE_BORDER;
+-    }
+-    managed->x = attributes.x;
+-    managed->y = attributes.y;
+-    if (managed->x == 0 && managed->y == 0) {
+-        managed->x = monitor.x + 90 + (next_position % 7) * 34;
+-        managed->y = monitor.y + 36 + (next_position % 6) * 30;
+-    }
+-    ++next_position;
+-    int max_x = monitor.x + monitor.width - managed->width - RESIZE_BORDER;
+-    int max_y = monitor.y + available_height - managed->height -
+-                TITLE_HEIGHT - RESIZE_BORDER;
+-    if (managed->x > max_x) {
+-        managed->x = max_x > monitor.x ? max_x : monitor.x;
+-    }
+-    if (managed->y > max_y) {
+-        managed->y = max_y > monitor.y ? max_y : monitor.y;
++    if (managed->width < MIN_WIDTH) {
++        managed->width = MIN_WIDTH;
++    }
++    if (managed->height < MIN_HEIGHT) {
++        managed->height = MIN_HEIGHT;
+     }
+ 
+     XSetWindowAttributes frame_attributes;
+@@ -418,6 +587,8 @@ static void manage_window(Window client)
+     XReparentWindow(display, client, managed->frame, 0, TITLE_HEIGHT);
+     XMapWindow(display, client);
+     XMapWindow(display, managed->frame);
++    maximize_client(index, 0);
++    sync_terminal_state(index);
+     focus_client(index);
+     draw_taskbar();
+     if (switcher_window != None) {
+@@ -432,6 +603,10 @@ static void forget_client(int index)
+     }
+     Window frame = clients[index].frame;
+     int was_focused = focused == index;
++    int was_terminal = clients[index].terminal;
++    if (was_terminal && --terminal_count == 0) {
++        terminal_keyboard_command("off");
++    }
+     XDestroyWindow(display, frame);
+     for (int i = index; i + 1 < client_count; ++i) {
+         clients[i] = clients[i + 1];
+@@ -502,10 +677,10 @@ static void close_focused(void)
+     XKillClient(display, clients[focused].client);
+ }
+ 
+-static void draw_taskbar_monitor(size_t monitor_index)
++static void draw_taskbar_monitor(void)
+ {
+-    Window window = taskbar_windows[monitor_index];
+-    int width = monitor_layout[monitor_index].width;
++    Window window = taskbar_window;
++    int width = screen_layout.width;
+     if (window == None || !taskbar_enabled) {
+         return;
+     }
+@@ -515,8 +690,8 @@ static void draw_taskbar_monitor(size_t monitor_index)
+     XSetForeground(display, gc, outline_color);
+     XDrawLine(display, window, gc, 0, 0, width, 0);
+     if (client_count == 0) {
+-        draw_round_rect(window, 17, 14, 18, 18, 6, active_color);
+-        draw_text(window, "No open applications", 46, 30, &muted_xft, 260);
++        draw_round_rect(window, 18, 25, 36, 36, 10, active_color);
++        draw_text(window, "No open applications", 70, 53, &muted_xft, 360);
+         return;
+     }
+ 
+@@ -542,7 +717,7 @@ static void draw_taskbar_monitor(size_t monitor_index)
+             unsigned long mark_color = i == focused
+                 ? accent_xft.pixel : muted_xft.pixel;
+             XSetForeground(display, gc, mark_color);
+-            XFillArc(display, window, gc, x + 12, 14, 18, 18,
++            XFillArc(display, window, gc, x + 12, 25, 36, 36,
+                      0, 360 * 64);
+             XSetForeground(display, gc,
+                            i == focused ? button_active_color : button_color);
+@@ -559,10 +734,10 @@ static void draw_taskbar_monitor(size_t monitor_index)
+                 mark_text[0] <= 'z') {
+                 mark_text[0] -= 'a' - 'A';
+             }
+-            draw_text(window, mark_text, x + 17, 27, &dark_xft, 10);
+-            draw_text(window, name, x + 38, 29,
++            draw_text(window, mark_text, x + 23, 50, &dark_xft, 14);
++            draw_text(window, name, x + 60, 53,
+                       i == focused ? &text_xft : &muted_xft,
+-                      card_width - 48);
++                      card_width - 70);
+             XFree(name);
+         }
+     }
+@@ -573,76 +748,45 @@ static void draw_taskbar_monitor(size_t monitor_index)
+         int x = offset + shown * button_width;
+         draw_round_rect(window, x, 5, button_width - 8, TASKBAR_HEIGHT - 10,
+                         9, button_color);
+-        draw_text(window, overflow, x + 10, 29, &muted_xft,
++        draw_text(window, overflow, x + 16, 53, &muted_xft,
+                   button_width - 24);
+     }
+ }
+ 
+ static void draw_taskbar(void)
+ {
+-    for (size_t i = 0; i < monitor_count; ++i) {
+-        draw_taskbar_monitor(i);
+-    }
++    draw_taskbar_monitor();
+ }
+ 
+ static void sync_taskbars(void)
+ {
+-    MonitorGeometry updated[MAX_MONITORS];
+-    size_t updated_count = monitor_layout_get(display, root, updated,
+-                                              MAX_MONITORS);
+-    if (updated_count == 0) {
+-        return;
+-    }
+-    for (size_t i = updated_count; i < monitor_count; ++i) {
+-        if (taskbar_windows[i] != None) {
+-            XDestroyWindow(display, taskbar_windows[i]);
+-            taskbar_windows[i] = None;
+-        }
+-    }
+-    memcpy(monitor_layout, updated,
+-           updated_count * sizeof(monitor_layout[0]));
+-    monitor_count = updated_count;
+-
++    screen_layout = screen_layout_get(display);
+     XSetWindowAttributes attributes;
+     attributes.override_redirect = True;
+     attributes.background_pixel = switcher_color;
+     attributes.event_mask = ExposureMask | ButtonPressMask;
+-    for (size_t i = 0; i < monitor_count; ++i) {
+-        if (taskbar_windows[i] == None) {
+-            taskbar_windows[i] = XCreateWindow(
+-                display, root, monitor_layout[i].x,
+-                monitor_layout[i].y + monitor_layout[i].height - TASKBAR_HEIGHT,
+-                (unsigned int)monitor_layout[i].width, TASKBAR_HEIGHT, 0,
+-                CopyFromParent, InputOutput, CopyFromParent,
+-                CWOverrideRedirect | CWBackPixel | CWEventMask, &attributes);
+-        } else {
+-            XMoveResizeWindow(
+-                display, taskbar_windows[i], monitor_layout[i].x,
+-                monitor_layout[i].y + monitor_layout[i].height - TASKBAR_HEIGHT,
+-                (unsigned int)monitor_layout[i].width, TASKBAR_HEIGHT);
+-        }
+-        if (taskbar_enabled) {
+-            XMapRaised(display, taskbar_windows[i]);
+-        } else {
+-            XUnmapWindow(display, taskbar_windows[i]);
+-        }
++    if (taskbar_window == None) {
++        taskbar_window = XCreateWindow(
++            display, root, screen_layout.x,
++            screen_layout.y + screen_layout.height - TASKBAR_HEIGHT,
++            (unsigned int)screen_layout.width, TASKBAR_HEIGHT, 0,
++            CopyFromParent, InputOutput, CopyFromParent,
++            CWOverrideRedirect | CWBackPixel | CWEventMask, &attributes);
++    } else {
++        XMoveResizeWindow(
++            display, taskbar_window, screen_layout.x,
++            screen_layout.y + screen_layout.height - TASKBAR_HEIGHT,
++            (unsigned int)screen_layout.width, TASKBAR_HEIGHT);
+     }
+-    draw_taskbar();
+-}
+-
+-static MonitorGeometry monitor_for_client(const ManagedWindow *managed)
+-{
+-    int center_x = managed->x + (managed->width + RESIZE_BORDER) / 2;
+-    int center_y = managed->y +
+-        (managed->height + TITLE_HEIGHT + RESIZE_BORDER) / 2;
+-    for (size_t i = 0; i < monitor_count; ++i) {
+-        MonitorGeometry monitor = monitor_layout[i];
+-        if (center_x >= monitor.x && center_x < monitor.x + monitor.width &&
+-            center_y >= monitor.y && center_y < monitor.y + monitor.height) {
+-            return monitor;
+-        }
++    if (taskbar_enabled) {
++        XMapRaised(display, taskbar_window);
++    } else {
++        XUnmapWindow(display, taskbar_window);
++    }
++    if (keyboard_window != None) {
++        place_keyboard_window(keyboard_window);
+     }
+-    return monitor_layout[0];
++    draw_taskbar();
+ }
+ 
+ static void relayout_for_screen_size(void)
+@@ -650,10 +794,13 @@ static void relayout_for_screen_size(void)
+     sync_taskbars();
+     for (int i = 0; i < client_count; ++i) {
+         ManagedWindow *managed = &clients[i];
+-        MonitorGeometry monitor = monitor_for_client(managed);
+-        int max_width = monitor.width - RESIZE_BORDER;
+-        int available_height = monitor.height -
+-            (taskbar_enabled ? TASKBAR_HEIGHT : 0);
++        int max_width = screen_layout.width - RESIZE_BORDER;
++        int available_height = screen_layout.height -
++            (taskbar_enabled && !managed->fullscreen ? TASKBAR_HEIGHT : 0);
++        if (managed->terminal && focused == i && !managed->fullscreen &&
++            terminal_count > 0) {
++            available_height -= KEYBOARD_HEIGHT;
++        }
+         int max_height = available_height - TITLE_HEIGHT - RESIZE_BORDER;
+         if (max_width >= MIN_WIDTH && managed->width > max_width) {
+             managed->width = max_width;
+@@ -661,20 +808,21 @@ static void relayout_for_screen_size(void)
+         if (max_height >= MIN_HEIGHT && managed->height > max_height) {
+             managed->height = max_height;
+         }
+-        int max_x = monitor.x + monitor.width - managed->width - RESIZE_BORDER;
+-        int max_y = monitor.y + available_height - managed->height -
++        int max_x = screen_layout.x + screen_layout.width - managed->width -
++                    RESIZE_BORDER;
++        int max_y = screen_layout.y + available_height - managed->height -
+                     TITLE_HEIGHT - RESIZE_BORDER;
+         if (managed->x > max_x) {
+-            managed->x = max_x > monitor.x ? max_x : monitor.x;
++            managed->x = max_x > screen_layout.x ? max_x : screen_layout.x;
+         }
+         if (managed->y > max_y) {
+-            managed->y = max_y > monitor.y ? max_y : monitor.y;
++            managed->y = max_y > screen_layout.y ? max_y : screen_layout.y;
+         }
+-        if (managed->x < monitor.x) {
+-            managed->x = monitor.x;
++        if (managed->x < screen_layout.x) {
++            managed->x = screen_layout.x;
+         }
+-        if (managed->y < monitor.y) {
+-            managed->y = monitor.y;
++        if (managed->y < screen_layout.y) {
++            managed->y = screen_layout.y;
+         }
+         arrange_client(i);
+     }
+@@ -708,12 +856,7 @@ static int taskbar_preference_from_root(void)
+ 
+ static int taskbar_window_index(Window window)
+ {
+-    for (size_t i = 0; i < monitor_count; ++i) {
+-        if (taskbar_windows[i] == window) {
+-            return (int)i;
+-        }
+-    }
+-    return -1;
++    return window == taskbar_window ? 0 : -1;
+ }
+ 
+ static void draw_switcher(void)
+@@ -772,7 +915,7 @@ static void show_switcher(void)
+     }
+     int visible = client_count < SWITCHER_ROWS ? client_count : SWITCHER_ROWS;
+     int height = visible * SWITCHER_ROW_HEIGHT + 72;
+-    MonitorGeometry monitor = monitor_layout[0];
++    ScreenGeometry monitor = screen_layout;
+     if (switcher_window == None) {
+         XSetWindowAttributes attributes;
+         attributes.override_redirect = True;
+@@ -826,6 +969,7 @@ int main(int argc, char **argv)
+     if (argc == 3 && strcmp(argv[1], "--ready-fd") == 0) {
+         ready_fd = atoi(argv[2]);
+     }
++    signal(SIGCHLD, SIG_IGN);
+ 
+     display = XOpenDisplay(NULL);
+     if (display == NULL) {
+@@ -847,9 +991,9 @@ int main(int argc, char **argv)
+     outline_color = named_color("#343d47");
+     close_color = named_color("#a94b55");
+     gc = XCreateGC(display, root, 0, NULL);
+-    ui_font = XftFontOpenName(display, screen, "sans:size=10");
++    ui_font = XftFontOpenName(display, screen, "sans:size=14");
+     if (ui_font == NULL) {
+-        ui_font = XftFontOpenName(display, screen, "monospace:size=10");
++        ui_font = XftFontOpenName(display, screen, "monospace:size=14");
+     }
+     if (ui_font == NULL) {
+         core_font = XLoadQueryFont(display, "fixed");
+@@ -862,11 +1006,9 @@ int main(int argc, char **argv)
+     allocate_text_color("#a4afbb", &muted_xft);
+     allocate_text_color("#83d6b1", &accent_xft);
+     allocate_text_color("#15201c", &dark_xft);
+-    int randr_available = XRRQueryExtension(display, &randr_event_base,
+-                                            &randr_error_base);
+-
+     XSelectInput(display, root, SubstructureRedirectMask | SubstructureNotifyMask |
+-                 ButtonPressMask | KeyPressMask | PropertyChangeMask);
++                 StructureNotifyMask | ButtonPressMask | KeyPressMask |
++                 PropertyChangeMask);
+     grab_key_with_locks(XK_F4, Mod1Mask);
+     grab_key_with_locks(XK_Tab, Mod1Mask);
+     grab_key_with_locks(XK_Tab, Mod1Mask | ShiftMask);
+@@ -882,12 +1024,6 @@ int main(int argc, char **argv)
+         XCloseDisplay(display);
+         return 1;
+     }
+-    if (randr_available) {
+-        long event_mask = monitor_layout_event_mask(display);
+-        if (event_mask != 0) {
+-            XRRSelectInput(display, root, event_mask);
+-        }
+-    }
+     taskbar_enabled = taskbar_preference_from_root();
+     sync_taskbars();
+ 
+@@ -903,12 +1039,8 @@ int main(int argc, char **argv)
+ 
+     for (;;) {
+         XNextEvent(display, &event);
+-        if (randr_available &&
+-            (event.type == randr_event_base + RRScreenChangeNotify ||
+-             event.type == randr_event_base + RRNotify)) {
+-            if (event.type == randr_event_base + RRScreenChangeNotify) {
+-                XRRUpdateConfiguration(&event);
+-            }
++        if (event.type == ConfigureNotify &&
++            event.xconfigure.window == root) {
+             relayout_for_screen_size();
+         } else if (event.type == PropertyNotify &&
+                    event.xproperty.window == root &&
+@@ -921,19 +1053,29 @@ int main(int argc, char **argv)
+             }
+         } else if (event.type == MapRequest) {
+             manage_window(event.xmaprequest.window);
++        } else if (event.type == MapNotify &&
++                   event.xmap.window != taskbar_window &&
++                   client_is_keyboard(event.xmap.window)) {
++            place_keyboard_window(event.xmap.window);
+         } else if (event.type == ConfigureRequest) {
+             int index = find_client(event.xconfigurerequest.window);
+             if (index < 0) {
+-                XWindowChanges changes;
+-                changes.x = event.xconfigurerequest.x;
+-                changes.y = event.xconfigurerequest.y;
+-                changes.width = event.xconfigurerequest.width;
+-                changes.height = event.xconfigurerequest.height;
+-                changes.border_width = event.xconfigurerequest.border_width;
+-                changes.sibling = event.xconfigurerequest.above;
+-                changes.stack_mode = event.xconfigurerequest.detail;
+-                XConfigureWindow(display, event.xconfigurerequest.window,
+-                                 event.xconfigurerequest.value_mask, &changes);
++                if (client_is_keyboard(event.xconfigurerequest.window)) {
++                    place_keyboard_window(event.xconfigurerequest.window);
++                } else {
++                    XWindowChanges changes;
++                    changes.x = event.xconfigurerequest.x;
++                    changes.y = event.xconfigurerequest.y;
++                    changes.width = event.xconfigurerequest.width;
++                    changes.height = event.xconfigurerequest.height;
++                    changes.border_width =
++                        event.xconfigurerequest.border_width;
++                    changes.sibling = event.xconfigurerequest.above;
++                    changes.stack_mode = event.xconfigurerequest.detail;
++                    XConfigureWindow(
++                        display, event.xconfigurerequest.window,
++                        event.xconfigurerequest.value_mask, &changes);
++                }
+             } else {
+                 ManagedWindow *managed = &clients[index];
+                 if (event.xconfigurerequest.value_mask & CWWidth) {
+@@ -944,9 +1086,49 @@ int main(int argc, char **argv)
+                     managed->height = event.xconfigurerequest.height < MIN_HEIGHT
+                         ? MIN_HEIGHT : event.xconfigurerequest.height;
+                 }
+-                arrange_client(index);
++                if (managed->terminal && focused == index &&
++                    !managed->fullscreen) {
++                    maximize_client(index, 0);
++                } else {
++                    arrange_client(index);
++                }
++            }
++        } else if (event.type == ClientMessage) {
++            Atom state_atom = XInternAtom(display, "_NET_WM_STATE", False);
++            Atom fullscreen_atom =
++                XInternAtom(display, "_NET_WM_STATE_FULLSCREEN", False);
++            Atom max_h_atom =
++                XInternAtom(display, "_NET_WM_STATE_MAXIMIZED_HORZ", False);
++            Atom max_v_atom =
++                XInternAtom(display, "_NET_WM_STATE_MAXIMIZED_VERT", False);
++            int index = find_client(event.xclient.window);
++            if (index >= 0 && event.xclient.message_type == state_atom &&
++                event.xclient.format == 32) {
++                long action = event.xclient.data.l[0];
++                Atom first = (Atom)event.xclient.data.l[1];
++                Atom second = (Atom)event.xclient.data.l[2];
++                int fullscreen = first == fullscreen_atom ||
++                                 second == fullscreen_atom;
++                int maximize = (first == max_h_atom || second == max_h_atom ||
++                                first == max_v_atom || second == max_v_atom);
++                if (fullscreen) {
++                    if (action == 2) {
++                        action = clients[index].fullscreen ? 0 : 1;
++                    }
++                    if (action != 0) {
++                        maximize_client(index, 1);
++                    } else {
++                        maximize_client(index, 0);
++                    }
++                } else if (maximize && action != 0) {
++                    maximize_client(index, 0);
++                }
+             }
+         } else if (event.type == UnmapNotify) {
++            if (event.xunmap.window == keyboard_window) {
++                keyboard_window = None;
++                continue;
++            }
+             int index = find_client(event.xunmap.window);
+             if (index >= 0 &&
+                 clients[index].client == event.xunmap.window &&
+@@ -957,6 +1139,10 @@ int main(int argc, char **argv)
+                 }
+             }
+         } else if (event.type == DestroyNotify) {
++            if (event.xdestroywindow.window == keyboard_window) {
++                keyboard_window = None;
++                continue;
++            }
+             int index = find_client(event.xdestroywindow.window);
+             if (index >= 0 && clients[index].client == event.xdestroywindow.window) {
+                 forget_client(index);
+@@ -969,16 +1155,20 @@ int main(int argc, char **argv)
+             draw_switcher();
+         } else if (event.type == Expose && event.xexpose.count == 0 &&
+                    taskbar_window_index(event.xexpose.window) >= 0) {
+-            draw_taskbar_monitor(
+-                (size_t)taskbar_window_index(event.xexpose.window));
++            draw_taskbar_monitor();
+         } else if (event.type == Expose && event.xexpose.count == 0) {
+             int index = find_client(event.xexpose.window);
+             if (index >= 0) {
+                 draw_frame(index);
+             }
+         } else if (event.type == PropertyNotify) {
++            if (event.xproperty.window == keyboard_window) {
++                place_keyboard_window(keyboard_window);
++                continue;
++            }
+             int index = find_client(event.xproperty.window);
+             if (index >= 0 && clients[index].client == event.xproperty.window) {
++                sync_terminal_state(index);
+                 draw_frame(index);
+                 draw_taskbar();
+             }
+@@ -993,7 +1183,7 @@ int main(int argc, char **argv)
+                 if (event.xbutton.button != Button1) {
+                     continue;
+                 }
+-                int screen_width = monitor_layout[taskbar_index].width;
++                int screen_width = screen_layout.width;
+                 if (client_count > 0) {
+                     int button_width;
+                     int shown;
+@@ -1039,6 +1229,9 @@ int main(int argc, char **argv)
+                                (event.xbutton.button == Button1 ||
+                                 event.xbutton.button == Button3);
+                 if (alt_drag) {
++                    if (clients[index].fullscreen) {
++                        maximize_client(index, 0);
++                    }
+                     moving_frame = clients[index].frame;
+                     drag_mode = event.xbutton.button == Button3 ? 3 : 0;
+                     drag_root_x = event.xbutton.x_root;
+@@ -1056,7 +1249,7 @@ int main(int argc, char **argv)
+             int title_click = event.xbutton.window == clients[index].frame &&
+                               event.xbutton.y < TITLE_HEIGHT;
+             int close_click = title_click &&
+-                event.xbutton.x >= clients[index].width - 40 &&
++                event.xbutton.x >= clients[index].width - 64 &&
+                 event.xbutton.x < clients[index].width;
+             if (close_click && event.xbutton.button == Button1) {
+                 close_focused();
+@@ -1070,6 +1263,9 @@ int main(int argc, char **argv)
+                 if (!alt_drag && event.xbutton.button != Button1) {
+                     continue;
+                 }
++                if (clients[index].fullscreen) {
++                    maximize_client(index, 0);
++                }
+                 moving_frame = clients[index].frame;
+                 if (alt_drag) {
+                     drag_mode = event.xbutton.button == Button3 ? 3 : 0;
+@@ -1099,18 +1295,53 @@ int main(int argc, char **argv)
+                 int dx = event.xmotion.x_root - drag_root_x;
+                 int dy = event.xmotion.y_root - drag_root_y;
+                 if (drag_mode != 0) {
++                    int maximum_width = screen_layout.width - RESIZE_BORDER;
++                    int maximum_height = screen_layout.height - TITLE_HEIGHT -
++                        RESIZE_BORDER -
++                        (taskbar_enabled ? TASKBAR_HEIGHT : 0);
++                    if (clients[index].terminal && focused == index &&
++                        terminal_count > 0) {
++                        maximum_height -= KEYBOARD_HEIGHT;
++                    }
+                     if ((drag_mode & 1) != 0) {
+                         clients[index].width = origin_width + dx < MIN_WIDTH
+                             ? MIN_WIDTH : origin_width + dx;
++                        if (clients[index].width > maximum_width) {
++                            clients[index].width = maximum_width;
++                        }
+                     }
+                     if ((drag_mode & 2) != 0) {
+                         clients[index].height = origin_height + dy < MIN_HEIGHT
+                             ? MIN_HEIGHT : origin_height + dy;
++                        if (clients[index].height > maximum_height) {
++                            clients[index].height = maximum_height;
++                        }
+                     }
+                 } else {
+                     clients[index].x = origin_x + dx;
+                     clients[index].y = origin_y + dy;
+                 }
++                int max_x = screen_layout.x + screen_layout.width -
++                            clients[index].width - RESIZE_BORDER;
++                int max_y = screen_layout.y + screen_layout.height -
++                            clients[index].height - TITLE_HEIGHT - RESIZE_BORDER -
++                            (taskbar_enabled ? TASKBAR_HEIGHT : 0);
++                if (clients[index].terminal && focused == index &&
++                    terminal_count > 0) {
++                    max_y -= KEYBOARD_HEIGHT;
++                }
++                if (clients[index].x < screen_layout.x) {
++                    clients[index].x = screen_layout.x;
++                }
++                if (clients[index].x > max_x) {
++                    clients[index].x = max_x;
++                }
++                if (clients[index].y < screen_layout.y) {
++                    clients[index].y = screen_layout.y;
++                }
++                if (clients[index].y > max_y) {
++                    clients[index].y = max_y;
++                }
+                 arrange_client(index);
+             }
+         } else if (event.type == ButtonRelease) {
+diff --git a/tests/characterize.sh b/tests/characterize.sh
+index f861a61..e3cd30c 100755
+--- a/tests/characterize.sh
++++ b/tests/characterize.sh
+@@ -5,7 +5,7 @@ ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+ HOST_DISPLAY=${DISPLAY:?Set DISPLAY to the host X server for Xephyr}
+ DISPLAY_NUMBER=${DISPLAY_NUMBER:-119}
+ TEST_DISPLAY=":$DISPLAY_NUMBER"
+-SCREEN_GEOMETRY=${SCREEN_GEOMETRY:-1280x800}
++SCREEN_GEOMETRY=${SCREEN_GEOMETRY:-720x1280}
+ SESSION="$ROOT/simple-desktop"
+ TEMP_HOME=
+ TEMP_OUTPUT=
+@@ -61,7 +61,8 @@ fi
+ mkdir -p "$OUT_DIR"
+ TEMP_HOME=$(mktemp -d)
+ mkdir -p "$TEMP_HOME/Desktop" "$TEMP_HOME/.config/simple-desktop"
+-printf 'memory_status=0\n' > "$TEMP_HOME/.config/simple-desktop/features"
++printf 'top_panel=1\ntaskbar=1\nicon_theme=__system__\n' \
++    > "$TEMP_HOME/.config/simple-desktop/features"
+ 
+ cleanup()
+ {
+@@ -217,7 +218,7 @@ capture launcher
+ DISPLAY="$TEST_DISPLAY" xdotool key Escape
+ sleep 0.5
+ 
+-DISPLAY="$TEST_DISPLAY" xdotool mousemove 430 125 click 1
++DISPLAY="$TEST_DISPLAY" xdotool mousemove 650 34 click 1
+ wait_for_window 'Field Desktop Settings'
+ sleep 1
+ capture settings-general

@@ -1,0 +1,41 @@
+#!/bin/sh
+set -eu
+
+export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/0}
+export GDK_GL=0
+export GDK_DEBUG=gl-disable
+export GSK_RENDERER=cairo
+mkdir -p "$XDG_RUNTIME_DIR"
+chmod 700 "$XDG_RUNTIME_DIR"
+dbus-uuidgen --ensure
+
+if [ ! -x /usr/bin/simple-desktop ] &&
+   [ ! -x /usr/local/bin/simple-desktop ]; then
+	echo "fieldm-session: simple-desktop is not installed" >&2
+	exit 1
+fi
+
+touch_device=
+for event in /sys/class/input/event*; do
+	[ "$(cat "$event/device/name" 2>/dev/null)" = sec_touchscreen ] || continue
+	touch_device="/dev/input/$(basename "$event")"
+	break
+done
+[ -n "$touch_device" ] ||
+	{ echo "fieldm-session: sec_touchscreen input device is unavailable" >&2; exit 1; }
+sed -i "s#Option \"Device\" \"/dev/input/event[0-9][0-9]*\"#Option \"Device\" \"$touch_device\"#" \
+	/etc/X11/xorg.conf.d/20-on5-touchscreen.conf
+
+cat > /root/.xinitrc <<'EOF'
+#!/bin/sh
+export XDG_SESSION_TYPE=x11
+export XDG_CURRENT_DESKTOP=FieldM
+rc-service zirarch-x11-refresh start
+xrandr --output default --mode 720x1280 2>/dev/null || true
+exec dbus-run-session -- /usr/bin/fieldm-desktop-launch
+EOF
+chmod 700 /root/.xinitrc
+startx /root/.xinitrc -- :0 vt1 -nolisten tcp
+status=$?
+rc-service zirarch-x11-refresh stop >/dev/null 2>&1 || true
+exit "$status"

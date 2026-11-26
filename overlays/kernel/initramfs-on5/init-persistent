@@ -1,0 +1,52 @@
+#!/bin/busybox sh
+
+PATH=/bin:/sbin
+export PATH
+BB=/bin/busybox
+
+rescue()
+{
+	"$BB" echo "$*" > /dev/console
+	"$BB" echo "$*" > /dev/tty0 2>/dev/null || true
+	"$BB" echo "Entering rescue shell." > /dev/console
+	exec "$BB" sh
+}
+
+"$BB" mount -t proc proc /proc || rescue "Could not mount procfs."
+"$BB" mount -t sysfs sysfs /sys || rescue "Could not mount sysfs."
+"$BB" mount -t devtmpfs devtmpfs /dev 2>/dev/null || true
+"$BB" mkdir -p /dev/pts /data /cache
+"$BB" mount -t devpts devpts /dev/pts 2>/dev/null || true
+
+"$BB" echo 0 > /sys/fs/selinux/enforce 2>/dev/null || true
+
+# Samsung defers bcmdhd SDIO enumeration until Android performs this read.
+if [ -r /proc/deferred_initcalls ]; then
+	"$BB" cat /proc/deferred_initcalls >/dev/null \
+		2>>/cache/zirarch-persistent-init.log || true
+fi
+
+"$BB" mount -o rw /dev/mmcblk0p20 /cache 2>/dev/null || true
+{
+	"$BB" echo "Zirarch persistent init started"
+	"$BB" date
+	"$BB" uname -a
+} > /cache/zirarch-persistent-init.log 2>&1 || true
+
+"$BB" mount -o rw /dev/mmcblk0p21 /data 2>>/cache/zirarch-persistent-init.log ||
+	rescue "Could not mount /dev/mmcblk0p21."
+
+ROOT=/data/zirarch-root
+[ -x "$ROOT/sbin/init" ] || rescue "Missing $ROOT/sbin/init."
+
+"$BB" mkdir -p "$ROOT/dev" "$ROOT/proc" "$ROOT/sys" "$ROOT/run" "$ROOT/tmp"
+"$BB" mount -o bind /dev "$ROOT/dev" 2>>/cache/zirarch-persistent-init.log ||
+	rescue "Could not bind /dev."
+"$BB" mount -o bind /proc "$ROOT/proc" 2>>/cache/zirarch-persistent-init.log ||
+	rescue "Could not bind /proc."
+"$BB" mount -o bind /sys "$ROOT/sys" 2>>/cache/zirarch-persistent-init.log ||
+	rescue "Could not bind /sys."
+
+"$BB" chmod 1777 "$ROOT/tmp" "$ROOT/run" 2>/dev/null || true
+"$BB" echo "Starting Alpine/OpenRC from $ROOT" >> /cache/zirarch-persistent-init.log
+exec "$BB" chroot "$ROOT" /sbin/init

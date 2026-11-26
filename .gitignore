@@ -1,0 +1,70 @@
+# Zirarch build products
+/builds/
+/backups/
+/boot-work/
+
+# Device-private and proprietary inputs
+/inputs/
+/on5-android-blobs/
+/kernel/firmware/on5/
+
+# Bootstrapped external source checkouts
+/kernel/
+/FieldM/
+/pmaports/
+/tools-pmbootstrap/
+/arm-eabi-4.8/
+/.venv-pmbootstrap/
+
+# Local credentials and session state
+/.*known-hosts*
+/.env
+/*.key
+/*.pub
+/.ssh/
+
+# C/C++/kernel build products (for a manual in-tree build)
+*.o
+*.a
+*.so
+*.ko
+*.cmd
+*.order
+*.symvers
+*.d
+*.tmp
+*.log
+*.swp
+*.swo
+.tmp_versions/
+Module.symvers
+System.map
+vmlinux
+vmlinux.o
+*.cpio
+*.cpio.gz
+
+# Device image and archive outputs
+*.img
+*.img.*
+*.tar
+*.tar.gz
+*.apk
+*.bin
+*.fw
+!overlays/kernel/initramfs-on5/framebuffer-off.bgra
+!overlays/kernel/initramfs-on5/framebuffer-on.bgra
+
+# Python/tooling
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.coverage
+
+# Editors and OS files
+.DS_Store
+Thumbs.db
+*~
+/.idea/
+/.vscode/

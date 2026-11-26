@@ -1,0 +1,22 @@
+#!/sbin/openrc-run
+
+description="Touch framebuffer keyboard for the tty1 console"
+command="/usr/bin/buffyboard"
+command_args="-r 0 -g 720x380@0,900"
+command_background=true
+pidfile="/run/buffyboard.pid"
+
+depend()
+{
+	need devfs
+	after consolefont
+}
+
+start_pre()
+{
+	[ -e /dev/uinput ] || modprobe uinput
+	[ -r /dev/input/event1 ] || return 1
+	setfont /usr/share/consolefonts/Lat2-Terminus16.psfu.gz \
+		-C /dev/tty1 2>/dev/null || true
+	echo 0 > /sys/class/graphics/fbcon/cursor_blink 2>/dev/null || true
+}
